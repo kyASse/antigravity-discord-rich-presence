@@ -204,6 +204,11 @@ export class PresenceStateMachine {
                 break;
         }
 
+        const isTerminated = payload.event === "SessionEnd" || session.status === PresenceStatus.STOPPED;
+        if ((payload.isSubagent || session.isSubagent) && (payload.event === "Stop" || isTerminated)) {
+            this.sessions.delete(convId);
+        }
+
         const currentStatus = this.getCurrentStatus();
         if (currentStatus === PresenceStatus.STOPPED) {
             this.startTimestamp = undefined;

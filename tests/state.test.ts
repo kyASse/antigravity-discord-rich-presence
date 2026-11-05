@@ -1,5 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
+import { execFileSync } from "node:child_process";
 import { PresenceStateMachine } from "../src/state";
 import { PresenceStatus, DEFAULT_CONFIG } from "../src/types";
 
@@ -113,5 +117,44 @@ describe("Presence State Machine", () => {
         });
         assert.equal(activity?.buttons, undefined);
         assert.equal(activity?.details, "Running: git");
+    });
+
+    it("includes View Repository button when Git remote exists and showRepoButton is true", async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-state-test-"));
+        try {
+            execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+            execFileSync(
+                "git",
+                ["config", "remote.origin.url", "https://github.com/test-owner/test-repo.git"],
+                { cwd: tmpDir, stdio: "ignore" }
+            );
+
+            const sm = new PresenceStateMachine({ ...DEFAULT_CONFIG, showRepoButton: true });
+            const activity = await sm.handleHook({
+                event: "PreInvocation",
+                conversationId: "c1",
+                cwd: tmpDir
+            });
+
+            assert.ok(activity?.buttons);
+            assert.deepEqual(activity.buttons, [
+                { label: "View Repository", url: "https://github.com/test-owner/test-repo" }
+            ]);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it("prunes subagent from sessions on termination", async () => {
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+        await sm.handleHook({ event: "PreInvocation", conversationId: "root" });
+        await sm.handleHook({ event: "PreInvocation", conversationId: "sub1", isSubagent: true });
+        assert.equal(sm.getActiveSubagentsCount(), 1);
+
+        await sm.handleHook({ event: "Stop", conversationId: "sub1", isSubagent: true, terminationReason: "NO_TOOL_CALL" });
+        assert.equal(sm.getActiveSubagentsCount(), 0);
+        // Verify sub1 was deleted from internal sessions
+        assert.equal((sm as any).sessions.has("sub1"), false);
+        assert.equal((sm as any).sessions.has("root"), true);
     });
 });

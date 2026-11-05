@@ -22,7 +22,13 @@ function sendIpcMessage(payload, timeoutMs = 1e3, socketPath) {
   return new Promise((resolve) => {
     const targetPath = socketPath || getIpcAddress();
     let settled = false;
-    const client = net.createConnection(targetPath);
+    let client;
+    try {
+      client = net.createConnection(targetPath);
+    } catch {
+      resolve(false);
+      return;
+    }
     const finish = (result) => {
       if (!settled) {
         settled = true;
@@ -174,7 +180,7 @@ function spawnDaemon(env = process.env) {
     return null;
   }
 }
-function readStdinSafely(timeoutMs = 200) {
+function readStdinSafely(timeoutMs = 40) {
   if (process.stdin.isTTY) {
     return Promise.resolve("");
   }
@@ -189,6 +195,7 @@ function readStdinSafely(timeoutMs = 200) {
       process.stdin.removeListener("data", onData);
       process.stdin.removeListener("end", onEnd);
       process.stdin.removeListener("error", onEnd);
+      process.stdin.pause();
     };
     const onEnd = () => {
       cleanup();
@@ -236,11 +243,13 @@ var isDirectRun = Boolean(
 if (isDirectRun) {
   readStdinSafely().then(async (stdinData) => {
     const result = await runDispatch(process.argv.slice(2), process.env, stdinData);
-    process.stdout.write(JSON.stringify(result ?? {}) + "\n");
-    process.exit(0);
+    process.stdout.write(JSON.stringify(result ?? {}) + "\n", () => {
+      process.exit(0);
+    });
   }).catch(() => {
-    process.stdout.write("{}\n");
-    process.exit(0);
+    process.stdout.write("{}\n", () => {
+      process.exit(0);
+    });
   });
 }
 export {

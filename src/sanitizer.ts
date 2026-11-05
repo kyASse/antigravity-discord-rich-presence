@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { HookPayload, PluginConfig } from "./types.js";
 
 /**
  * Strips authentication credentials and normalizes Git remote URLs to standard web URLs.
@@ -44,10 +43,10 @@ export function sanitizeGitUrl(rawUrl: string): string | undefined {
 
         const cleanPath = parsed.pathname.replace(/\.git\/?$/, "").replace(/\/+$/, "");
         if (!cleanPath || cleanPath === "/") {
-            return `${protocol}//${parsed.hostname}`;
+            return `${protocol}//${parsed.host}`;
         }
 
-        return `${protocol}//${parsed.hostname}${cleanPath}`;
+        return `${protocol}//${parsed.host}${cleanPath}`;
     } catch {
         return undefined;
     }

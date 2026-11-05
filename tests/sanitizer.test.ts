@@ -18,6 +18,10 @@ describe("Sanitizer", () => {
             sanitizeGitUrl("ssh://git@github.com/owner/repo.git"),
             "https://github.com/owner/repo"
         );
+        assert.equal(
+            sanitizeGitUrl("https://user:pass@gitlab.corp.net:8080/group/project.git"),
+            "https://gitlab.corp.net:8080/group/project"
+        );
     });
 
     it("sanitizes commands and masks passwords in privacy mode", () => {

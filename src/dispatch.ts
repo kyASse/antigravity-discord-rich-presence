@@ -171,7 +171,7 @@ export function spawnDaemon(env: NodeJS.ProcessEnv = process.env): child_process
 /**
  * Safely reads STDIN within a tight timeout without blocking.
  */
-export function readStdinSafely(timeoutMs: number = 200): Promise<string> {
+export function readStdinSafely(timeoutMs: number = 40): Promise<string> {
     if (process.stdin.isTTY) {
         return Promise.resolve("");
     }
@@ -188,6 +188,7 @@ export function readStdinSafely(timeoutMs: number = 200): Promise<string> {
             process.stdin.removeListener("data", onData);
             process.stdin.removeListener("end", onEnd);
             process.stdin.removeListener("error", onEnd);
+            process.stdin.pause();
         };
 
         const onEnd = () => {
@@ -267,11 +268,13 @@ if (isDirectRun) {
     readStdinSafely()
         .then(async (stdinData) => {
             const result = await runDispatch(process.argv.slice(2), process.env, stdinData);
-            process.stdout.write(JSON.stringify(result ?? {}) + "\n");
-            process.exit(0);
+            process.stdout.write(JSON.stringify(result ?? {}) + "\n", () => {
+                process.exit(0);
+            });
         })
         .catch(() => {
-            process.stdout.write("{}\n");
-            process.exit(0);
+            process.stdout.write("{}\n", () => {
+                process.exit(0);
+            });
         });
 }

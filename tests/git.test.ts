@@ -42,6 +42,12 @@ describe("Git Info Reader", () => {
             assert.equal(info.remoteUrl, "https://github.com/my-org/my-project");
             assert.ok(!info.remoteUrl.includes("ghp_secretToken12345"));
             assert.ok(!info.remoteUrl.includes("@"));
+
+            // Detached HEAD should not report literal "HEAD" as branch
+            const commitSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: tmpDir, encoding: "utf-8" }).trim();
+            execFileSync("git", ["checkout", commitSha], { cwd: tmpDir, stdio: "ignore" });
+            const detachedInfo = await getGitInfo(tmpDir);
+            assert.equal(detachedInfo.branch, undefined);
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }

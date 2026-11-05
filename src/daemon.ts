@@ -66,6 +66,9 @@ export class RpcDaemon {
             (this.rpcClient as any).on("disconnected", () => {
                 this._isConnected = false;
             });
+            (this.rpcClient as any).on("error", () => {
+                this._isConnected = false;
+            });
         }
 
         // Catch low-level transport errors to prevent unhandled node exceptions
@@ -266,7 +269,10 @@ if (isDirectRun) {
         process.exit(1);
     });
 
+    let isShuttingDown = false;
     const shutdown = async () => {
+        if (isShuttingDown) return;
+        isShuttingDown = true;
         await daemon.stop();
         process.exit(0);
     };

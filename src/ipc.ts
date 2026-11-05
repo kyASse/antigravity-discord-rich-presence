@@ -151,7 +151,13 @@ export function sendIpcMessage(
         const targetPath = socketPath || getIpcAddress();
         let settled = false;
 
-        const client = net.createConnection(targetPath);
+        let client: net.Socket;
+        try {
+            client = net.createConnection(targetPath);
+        } catch {
+            resolve(false);
+            return;
+        }
 
         const finish = (result: boolean) => {
             if (!settled) {

@@ -72,7 +72,7 @@ export async function getGitInfo(dirPath: string): Promise<GitInfo> {
 
         const info: GitInfo = {};
 
-        if (branchRaw) {
+        if (branchRaw && branchRaw !== "HEAD") {
             info.branch = branchRaw;
         }
 

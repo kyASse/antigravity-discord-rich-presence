@@ -31403,9 +31403,9 @@ function sanitizeGitUrl(rawUrl) {
     parsed.password = "";
     const cleanPath = parsed.pathname.replace(/\.git\/?$/, "").replace(/\/+$/, "");
     if (!cleanPath || cleanPath === "/") {
-      return `${protocol}//${parsed.hostname}`;
+      return `${protocol}//${parsed.host}`;
     }
-    return `${protocol}//${parsed.hostname}${cleanPath}`;
+    return `${protocol}//${parsed.host}${cleanPath}`;
   } catch {
     return void 0;
   }
@@ -31562,7 +31562,7 @@ async function getGitInfo(dirPath) {
       execGit(["rev-parse", "--show-toplevel"], dirPath)
     ]);
     const info = {};
-    if (branchRaw) {
+    if (branchRaw && branchRaw !== "HEAD") {
       info.branch = branchRaw;
     }
     if (remoteRaw) {
@@ -31746,6 +31746,10 @@ var PresenceStateMachine = class {
       }
       default:
         break;
+    }
+    const isTerminated = payload.event === "SessionEnd" || session.status === "STOPPED" /* STOPPED */;
+    if ((payload.isSubagent || session.isSubagent) && (payload.event === "Stop" || isTerminated)) {
+      this.sessions.delete(convId);
     }
     const currentStatus = this.getCurrentStatus();
     if (currentStatus === "STOPPED" /* STOPPED */) {
@@ -32030,6 +32034,9 @@ var RpcDaemon = class {
       this.rpcClient.on("disconnected", () => {
         this._isConnected = false;
       });
+      this.rpcClient.on("error", () => {
+        this._isConnected = false;
+      });
     }
     if (this.rpcClient.transport && typeof this.rpcClient.transport.on === "function") {
       this.rpcClient.transport.on("error", () => {
@@ -32199,7 +32206,10 @@ if (isDirectRun) {
     console.error("Failed to start RPC daemon:", err);
     process.exit(1);
   });
+  let isShuttingDown = false;
   const shutdown = async () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     await daemon.stop();
     process.exit(0);
   };
