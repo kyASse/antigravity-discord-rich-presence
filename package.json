@@ -6,6 +6,7 @@
   "main": "bin/dispatch.js",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "prepack": "npm run build",
     "test": "tsx --test tests/**/*.test.ts"
   },
   "keywords": [
