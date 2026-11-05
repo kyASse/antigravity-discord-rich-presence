@@ -1,0 +1,28 @@
+{
+  "name": "antigravity-discord-presence",
+  "version": "1.0.0",
+  "description": "Discord Rich Presence plugin for Antigravity App",
+  "type": "module",
+  "main": "bin/dispatch.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "keywords": [
+    "antigravity",
+    "discord",
+    "rich-presence",
+    "plugin"
+  ],
+  "author": "Antigravity Engineering",
+  "license": "MIT",
+  "dependencies": {
+    "@xhayper/discord-rpc": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
