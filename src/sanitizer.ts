@@ -86,19 +86,19 @@ export function sanitizeCommand(command: string, privacyMode: boolean = false): 
 
     let sanitized = command;
 
-    // Mask basic auth in inline URLs
-    sanitized = sanitized.replace(/(https?:\/\/)[^/\s:@]+:[^/\s:@]+@/gi, "$1");
+    // Mask credentials in inline URLs (handles both token@ and user:pass@)
+    sanitized = sanitized.replace(/(https?:\/\/)[^/\s@]+@/gi, "$1");
 
-    // Mask key=value or key:value secrets
+    // Mask key=value or key:value secrets (supporting quoted strings with spaces)
     sanitized = sanitized.replace(
-        /(\b(?:token|password|pass|secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)\b\s*[:=]\s*)(['"]?)[^\s;&|'"]+\2/gi,
+        /(\b(?:token|password|pass|secret|api[_-]?key|access[_-]?token|auth[_-]?token|private[_-]?key)\b\s*[:=]\s*)('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
         "$1***"
     );
 
-    // Mask CLI flags like --password secret or --token secret
+    // Mask CLI flags like --password secret or --token=secret (supporting quoted strings with spaces)
     sanitized = sanitized.replace(
-        /(\b(?:--token|--password|--secret|--api[_-]?key)\s+)(['"]?)[^\s;&|'"]+\2/gi,
-        "$1***"
+        /(^|\s)(--token|--password|--secret|--api[_-]?key)(\s+|=\s*)('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
+        "$1$2$3***"
     );
 
     // Mask Bearer tokens
@@ -144,12 +144,20 @@ export function mapToolToAction(
         }
 
         case "run_command": {
+            if (privacyMode) {
+                if (args?.CommandLine && typeof args.CommandLine === "string" && args.CommandLine.trim().length > 0) {
+                    const cmd = sanitizeCommand(args.CommandLine, true);
+                    return cmd ? `Running: ${cmd}` : "Running command";
+                }
+                return "Running command";
+            }
+
             if (args?.toolSummary && typeof args.toolSummary === "string" && args.toolSummary.trim().length > 0) {
                 return `Running: ${args.toolSummary.trim()}`;
             }
 
             if (args?.CommandLine && typeof args.CommandLine === "string" && args.CommandLine.trim().length > 0) {
-                const cmd = sanitizeCommand(args.CommandLine, privacyMode);
+                const cmd = sanitizeCommand(args.CommandLine, false);
                 return cmd ? `Running: ${cmd}` : "Running command";
             }
 
