@@ -6,9 +6,12 @@ import { HookPayload, PresenceStatus } from "../src/types";
 
 describe("Local IPC Channel", () => {
     let server: IpcServer;
+    const testPipe = process.platform === "win32"
+        ? `\\\\.\\pipe\\test-ipc-${process.pid}-${Date.now()}`
+        : `/tmp/test-ipc-${process.pid}-${Date.now()}.sock`;
 
     before(async () => {
-        server = new IpcServer();
+        server = new IpcServer(testPipe);
         await server.start();
     });
 
@@ -27,7 +30,7 @@ describe("Local IPC Channel", () => {
             conversationId: "test-conv-123"
         };
 
-        const success = await sendIpcMessage(testPayload, 1000);
+        const success = await sendIpcMessage(testPayload, 1000, testPipe);
         assert.equal(success, true);
         assert.deepEqual(received, testPayload);
     });

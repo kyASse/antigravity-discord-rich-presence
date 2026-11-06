@@ -9,9 +9,13 @@ import { HookPayload } from "../src/types.js";
 describe("CLI Dispatcher", () => {
     let server: IpcServer;
     let receivedPayload: HookPayload | null = null;
+    const testPipe = process.platform === "win32"
+        ? `\\\\.\\pipe\\test-dispatch-${process.pid}-${Date.now()}`
+        : `/tmp/test-dispatch-${process.pid}-${Date.now()}.sock`;
+    const testEnv = { ...process.env, AGY_IPC_PATH: testPipe, AGY_AUTO_SPAWN: "false" };
 
     before(async () => {
-        server = new IpcServer();
+        server = new IpcServer(testPipe);
         server.onMessage = (p) => {
             receivedPayload = p;
         };
@@ -24,7 +28,7 @@ describe("CLI Dispatcher", () => {
 
     it("parses CLI args and dispatches event to IPC server within 50ms", async () => {
         const start = performance.now();
-        await runDispatch(["--event", "PreInvocation", "--conversationId", "c-456"], process.env);
+        await runDispatch(["--event", "PreInvocation", "--conversationId", "c-456"], testEnv);
         const duration = performance.now() - start;
 
         assert.ok(duration < 100, `Dispatch took too long: ${duration}ms`);
@@ -41,7 +45,7 @@ describe("CLI Dispatcher", () => {
             "--toolArgs", '{"CommandLine":"npm test"}',
             "--isSubagent", "true",
             "--cwd", "C:/test/workspace"
-        ], process.env);
+        ], testEnv);
 
         const payload: HookPayload | null = receivedPayload;
         assert.equal(payload?.event, "PreToolUse");
@@ -64,7 +68,7 @@ describe("CLI Dispatcher", () => {
             workspacePaths: ["C:/test/stdin-project"]
         });
 
-        await runDispatch([], process.env, stdinJson);
+        await runDispatch([], testEnv, stdinJson);
 
         const payload: HookPayload | null = receivedPayload;
         assert.equal(payload?.event, "PreToolUse");
@@ -82,7 +86,7 @@ describe("CLI Dispatcher", () => {
             workspacePaths: ["/original/path"]
         });
 
-        await runDispatch(["--event", "Stop", "--conversationId", "override-id", "--terminationReason", "NO_TOOL_CALL"], process.env, stdinJson);
+        await runDispatch(["--event", "Stop", "--conversationId", "override-id", "--terminationReason", "NO_TOOL_CALL"], testEnv, stdinJson);
 
         const payload: HookPayload | null = receivedPayload;
         assert.equal(payload?.event, "Stop");
@@ -110,10 +114,10 @@ describe("CLI Dispatcher", () => {
     });
 
     it("returns expected hook decision objects", async () => {
-        const preToolResult = await runDispatch(["--event", "PreToolUse", "--conversationId", "c-1"], process.env);
+        const preToolResult = await runDispatch(["--event", "PreToolUse", "--conversationId", "c-1"], testEnv);
         assert.deepEqual(preToolResult, { decision: "allow" });
 
-        const preInvocResult = await runDispatch(["--event", "PreInvocation", "--conversationId", "c-1"], process.env);
+        const preInvocResult = await runDispatch(["--event", "PreInvocation", "--conversationId", "c-1"], testEnv);
         assert.deepEqual(preInvocResult, {});
     });
 });

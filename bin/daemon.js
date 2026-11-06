@@ -31609,13 +31609,19 @@ var PresenceStateMachine = class {
   /**
    * Determines the overall presence status across all tracked sessions based on precedence:
    * EXECUTING_TOOL > THINKING > WAITING_REVIEW > IDLE > STOPPED
+   * Stale sessions (>2 minutes inactive without updates) in THINKING/EXECUTING_TOOL
+   * are demoted to WAITING_REVIEW so they do not block state progression.
    */
-  getCurrentStatus() {
+  getCurrentStatus(now = Date.now()) {
     let hasExecutingTool = false;
     let hasThinking = false;
     let hasWaitingReview = false;
     let hasIdle = false;
+    const STALE_THRESHOLD_MS = 12e4;
     for (const session of this.sessions.values()) {
+      if ((session.status === "EXECUTING_TOOL" /* EXECUTING_TOOL */ || session.status === "THINKING" /* THINKING */) && now - session.updatedAt > STALE_THRESHOLD_MS) {
+        session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
+      }
       switch (session.status) {
         case "EXECUTING_TOOL" /* EXECUTING_TOOL */:
           hasExecutingTool = true;
@@ -31640,10 +31646,11 @@ var PresenceStateMachine = class {
   /**
    * Returns the count of currently active subagents (actively thinking or running tools).
    */
-  getActiveSubagentsCount() {
+  getActiveSubagentsCount(now = Date.now()) {
     let count = 0;
+    const STALE_THRESHOLD_MS = 12e4;
     for (const session of this.sessions.values()) {
-      if (session.isSubagent && (session.status === "THINKING" /* THINKING */ || session.status === "EXECUTING_TOOL" /* EXECUTING_TOOL */)) {
+      if (session.isSubagent && now - session.updatedAt <= STALE_THRESHOLD_MS && (session.status === "THINKING" /* THINKING */ || session.status === "EXECUTING_TOOL" /* EXECUTING_TOOL */)) {
         count++;
       }
     }
@@ -31723,19 +31730,19 @@ var PresenceStateMachine = class {
         break;
       }
       case "Stop": {
-        if (payload.terminationReason === "NO_TOOL_CALL") {
-          if (session.isSubagent) {
-            session.status = "STOPPED" /* STOPPED */;
-          } else {
-            session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
-          }
-        } else {
+        if (payload.terminationReason === "USER_CANCELED") {
           if (!session.isSubagent) {
             for (const s of this.sessions.values()) {
               s.status = "STOPPED" /* STOPPED */;
             }
           } else {
             session.status = "STOPPED" /* STOPPED */;
+          }
+        } else {
+          if (session.isSubagent) {
+            session.status = "STOPPED" /* STOPPED */;
+          } else {
+            session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
           }
         }
         break;

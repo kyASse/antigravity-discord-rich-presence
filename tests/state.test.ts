@@ -157,4 +157,27 @@ describe("Presence State Machine", () => {
         assert.equal((sm as any).sessions.has("sub1"), false);
         assert.equal((sm as any).sessions.has("root"), true);
     });
+
+    it("transitions to WAITING_REVIEW on Stop when terminationReason is omitted or undefined", async () => {
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+        await sm.handleHook({ event: "PreInvocation", conversationId: "c1" });
+        const activity = await sm.handleHook({ event: "Stop", conversationId: "c1" });
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+        assert.match(activity?.details ?? "", /Waiting for user review/);
+    });
+
+    it("does not let an old stale session indefinitely block WAITING_REVIEW", async () => {
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+        // Stale test session created 10 minutes ago
+        await sm.handleHook({ event: "PreInvocation", conversationId: "stale-test" });
+        const staleSession = (sm as any).sessions.get("stale-test");
+        staleSession.updatedAt = Date.now() - 600_000; // 10 minutes old
+
+        // New real conversation finishes
+        await sm.handleHook({ event: "PreInvocation", conversationId: "real-c1" });
+        const activity = await sm.handleHook({ event: "Stop", conversationId: "real-c1", terminationReason: "NO_TOOL_CALL" });
+
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+        assert.match(activity?.details ?? "", /Waiting for user review/);
+    });
 });

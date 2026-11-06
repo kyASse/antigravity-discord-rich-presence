@@ -41,14 +41,25 @@ export class PresenceStateMachine {
     /**
      * Determines the overall presence status across all tracked sessions based on precedence:
      * EXECUTING_TOOL > THINKING > WAITING_REVIEW > IDLE > STOPPED
+     * Stale sessions (>2 minutes inactive without updates) in THINKING/EXECUTING_TOOL
+     * are demoted to WAITING_REVIEW so they do not block state progression.
      */
-    public getCurrentStatus(): PresenceStatus {
+    public getCurrentStatus(now: number = Date.now()): PresenceStatus {
         let hasExecutingTool = false;
         let hasThinking = false;
         let hasWaitingReview = false;
         let hasIdle = false;
 
+        const STALE_THRESHOLD_MS = 120_000; // 2 minutes
+
         for (const session of this.sessions.values()) {
+            if (
+                (session.status === PresenceStatus.EXECUTING_TOOL || session.status === PresenceStatus.THINKING) &&
+                now - session.updatedAt > STALE_THRESHOLD_MS
+            ) {
+                session.status = PresenceStatus.WAITING_REVIEW;
+            }
+
             switch (session.status) {
                 case PresenceStatus.EXECUTING_TOOL:
                     hasExecutingTool = true;
@@ -75,11 +86,13 @@ export class PresenceStateMachine {
     /**
      * Returns the count of currently active subagents (actively thinking or running tools).
      */
-    public getActiveSubagentsCount(): number {
+    public getActiveSubagentsCount(now: number = Date.now()): number {
         let count = 0;
+        const STALE_THRESHOLD_MS = 120_000;
         for (const session of this.sessions.values()) {
             if (
                 session.isSubagent &&
+                now - session.updatedAt <= STALE_THRESHOLD_MS &&
                 (session.status === PresenceStatus.THINKING ||
                     session.status === PresenceStatus.EXECUTING_TOOL)
             ) {
@@ -172,22 +185,23 @@ export class PresenceStateMachine {
             }
 
             case "Stop": {
-                if (payload.terminationReason === "NO_TOOL_CALL") {
-                    if (session.isSubagent) {
-                        // Subagent completes its autonomous turn
-                        session.status = PresenceStatus.STOPPED;
-                    } else {
-                        // Normal primary agent turn end -> waiting for user review
-                        session.status = PresenceStatus.WAITING_REVIEW;
-                    }
-                } else {
-                    // Explicit cancellation or abnormal session termination
+                if (payload.terminationReason === "USER_CANCELED") {
+                    // Explicit user cancellation or termination -> clear presence
                     if (!session.isSubagent) {
                         for (const s of this.sessions.values()) {
                             s.status = PresenceStatus.STOPPED;
                         }
                     } else {
                         session.status = PresenceStatus.STOPPED;
+                    }
+                } else {
+                    // Normal completion (NO_TOOL_CALL, omitted reason, MAX_INVOCATIONS, etc.)
+                    if (session.isSubagent) {
+                        // Subagent completes its autonomous turn
+                        session.status = PresenceStatus.STOPPED;
+                    } else {
+                        // Normal primary agent turn end -> waiting for user review
+                        session.status = PresenceStatus.WAITING_REVIEW;
                     }
                 }
                 break;
