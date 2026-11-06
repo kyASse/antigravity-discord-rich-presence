@@ -246,6 +246,9 @@ export async function runDispatch(
         const autoSpawnAllowed = env.AGY_AUTO_SPAWN !== "false" && process.env.AGY_AUTO_SPAWN !== "false";
         if (autoSpawnAllowed) {
             spawnDaemon(env);
+            // Brief wait for daemon socket initialization to deliver the initial event
+            await new Promise((r) => setTimeout(r, 200));
+            await sendIpcMessage(payload, 200, targetSocket);
         }
     }
 

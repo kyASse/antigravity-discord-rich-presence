@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { createRequire as __createRequire } from "node:module";
+const require = __createRequire(import.meta.url);
 
 
 // src/dispatch.ts
@@ -230,6 +232,8 @@ async function runDispatch(argv, env = process.env, stdinInput) {
     const autoSpawnAllowed = env.AGY_AUTO_SPAWN !== "false" && process.env.AGY_AUTO_SPAWN !== "false";
     if (autoSpawnAllowed) {
       spawnDaemon(env);
+      await new Promise((r) => setTimeout(r, 200));
+      await sendIpcMessage(payload, 200, targetSocket);
     }
   }
   if (event === "PreToolUse") {

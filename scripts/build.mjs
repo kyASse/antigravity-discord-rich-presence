@@ -14,7 +14,10 @@ const commonOptions = {
     format: "esm",
     sourcemap: false,
     banner: {
-        js: "#!/usr/bin/env node\n"
+        js: `#!/usr/bin/env node
+import { createRequire as __createRequire } from "node:module";
+const require = __createRequire(import.meta.url);
+`
     }
 };
 
