@@ -39,54 +39,46 @@ This plugin displays your real-time agent activity, current project, Git branch,
 
 ## Installation
 
-### Option 1: Global Plugin (Recommended)
-
-Install globally so the presence updates across all your Antigravity workspaces:
-
-```bash
-# Clone or copy into your global Antigravity plugins directory:
-# On Windows: %USERPROFILE%\.gemini\config\plugins\discord-presence
-# On Linux/macOS: ~/.gemini/config/plugins/discord-presence
-
-git clone https://github.com/sanbercode/antigravity-discord-rich-presence.git ~/.gemini/config/plugins/discord-presence
-cd ~/.gemini/config/plugins/discord-presence
-npm install
-npm run build
-```
-
-### Option 2: Project-Scoped Plugin
-
-Install locally inside a specific project repository:
-
-```bash
-mkdir -p .agents/plugins/discord-presence
-git clone https://github.com/sanbercode/antigravity-discord-rich-presence.git .agents/plugins/discord-presence
-cd .agents/plugins/discord-presence
-npm install
-npm run build
-```
+### Prerequisites
+1. **Node.js**: Version 18+ must be installed and available in your `PATH`.
+2. **Discord Desktop**: The native Discord desktop app (Windows, macOS, or Linux) must be running.
+3. **Discord Activity Privacy**: In Discord, go to **User Settings** (`⚙`) → **Activity Privacy** → turn on **"Display current activity as a status message"**.
 
 ---
 
-## How It Works
+### Quick Install (Zero Build Required)
 
-Antigravity invokes the plugin hooks configured in `hooks.json` on key agent lifecycle events:
+Because production binaries in `bin/` are pre-bundled, you **do not** need `npm install` or `npm run build` to use the plugin.
 
-```
-[Antigravity Session]
-        │
-        ├── SessionStart ──> bin/dispatch.js ──(Auto-spawn)──> bin/daemon.js
-        ├── PreInvocation ─> bin/dispatch.js ──(Local IPC)────>       │
-        ├── PreToolUse ────> bin/dispatch.js ──(Local IPC)────>       │
-        ├── PostToolUse ───> bin/dispatch.js ──(Local IPC)────>       │
-        ├── PostInvocation > bin/dispatch.js ──(Local IPC)────>       ▼
-        └── Stop ──────────> bin/dispatch.js ──(Local IPC)──> [Discord Client]
-```
+#### Option 1: Global Plugin (Recommended for All Projects)
+Makes Discord Rich Presence active across all your Antigravity workspaces.
 
-1. When Antigravity starts or emits an event, `bin/dispatch.js` is triggered.
-2. `dispatch.js` sends the payload over a local named pipe (Windows) or domain socket (macOS/Linux) to `daemon.js` within <50ms.
-3. If `daemon.js` is not yet running, `dispatch.js` automatically spawns it in the background.
-4. `daemon.js` computes state transitions, arbitrates subagents, throttles rapid updates, and pushes the rich presence activity directly to Discord via Discord RPC.
+* **On Windows (PowerShell):**
+  ```powershell
+  git clone https://github.com/kyASse/antigravity-discord-rich-presence.git "$HOME\.gemini\config\plugins\antigravity-discord-presence"
+  ```
+
+* **On macOS / Linux (Bash):**
+  ```bash
+  git clone https://github.com/kyASse/antigravity-discord-rich-presence.git ~/.gemini/config/plugins/antigravity-discord-presence
+  ```
+
+#### Option 2: Project-Scoped Plugin
+Activate the plugin only for a specific repository:
+
+* **On Windows (PowerShell):**
+  ```powershell
+  New-Item -ItemType Directory -Force -Path ".agents\plugins"
+  git clone https://github.com/kyASse/antigravity-discord-rich-presence.git ".agents\plugins\antigravity-discord-presence"
+  ```
+
+* **On macOS / Linux (Bash):**
+  ```bash
+  mkdir -p .agents/plugins
+  git clone https://github.com/kyASse/antigravity-discord-rich-presence.git .agents/plugins/antigravity-discord-presence
+  ```
+
+After cloning, **restart Antigravity App** (or start a new conversation session). The plugin will automatically connect to Discord!
 
 ---
 
@@ -96,8 +88,24 @@ The plugin works out of the box with zero configuration. You can customize behav
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `AGY_DISCORD_CLIENT_ID` | `string` | `1347000000000000000` | Custom Discord Application Client ID |
+| `AGY_DISCORD_CLIENT_ID` | `string` | `1441771215290372156` | Custom Discord Application Client ID |
 | `AGY_DISCORD_PRIVACY_MODE` | `boolean` | `false` | When `true`, hides repository buttons and obscures command details |
+| `AGY_DISCORD_IDLE_TIMEOUT` | `number` | `300` | Inactivity idle timeout in seconds (default: 5 minutes) |
+| `AGY_DISCORD_SHOW_REPO_BUTTON` | `boolean` | `true` | Show clickable "View Repository" action button |
+
+---
+
+## Development & Contributing
+
+If you wish to modify the source code or contribute:
+
+```bash
+git clone https://github.com/kyASse/antigravity-discord-rich-presence.git
+cd antigravity-discord-rich-presence
+npm install
+npm test       # Run full automated test suite (37 tests)
+npm run build  # Rebuild standalone binaries in bin/
+```
 | `AGY_DISCORD_IDLE_TIMEOUT` | `number` | `300` | Inactivity idle timeout in seconds (default: 5 minutes) |
 | `AGY_DISCORD_SHOW_REPO_BUTTON` | `boolean` | `true` | Whether to display "View Repository" button |
 | `AGY_AUTO_SPAWN` | `boolean` | `true` | Set to `false` to disable auto-spawning the daemon |
