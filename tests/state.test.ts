@@ -180,4 +180,26 @@ describe("Presence State Machine", () => {
         assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
         assert.match(activity?.details ?? "", /Waiting for user review/);
     });
+
+    it("transitions to WAITING_REVIEW on PostInvocation even if previous status was EXECUTING_TOOL", async () => {
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+        await sm.handleHook({ event: "PreToolUse", conversationId: "c1", toolName: "read_file" });
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+        const activity = await sm.handleHook({ event: "PostInvocation", conversationId: "c1" });
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+        assert.match(activity?.details ?? "", /Waiting for user review/);
+    });
+
+    it("clears any executing tool session when Stop arrives for primary agent", async () => {
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+        // Suppose a session with key 'default' was marked as EXECUTING_TOOL
+        await sm.handleHook({ event: "PreToolUse", conversationId: "default", toolName: "read_file" });
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+        // Stop arrives with conversationId "c1"
+        const activity = await sm.handleHook({ event: "Stop", conversationId: "c1", terminationReason: "NO_TOOL_CALL" });
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+        assert.match(activity?.details ?? "", /Waiting for user review/);
+    });
 });

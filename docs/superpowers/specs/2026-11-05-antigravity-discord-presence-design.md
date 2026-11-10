@@ -86,7 +86,7 @@ Instead of raw internal tool names, actions are mapped into user-friendly descri
 - `search_web` -> `Searching documentation`
 
 ### Discord Application ID & Asset Configuration
-- **Default Application ID:** Uses the pre-registered Antigravity Client ID `1441771215290372156`.
+- **Default Application ID:** Uses the pre-registered Antigravity Client ID `1568484776703299726`.
 - **Configurable Fallback:** A local `config.json` allows users to specify their own `clientId` and custom image asset keys if desired.
 - **Asset Fallback:** If specific asset keys are unavailable or fail to resolve on Discord's CDN, the daemon gracefully falls back to text-only presence without crashing.
 

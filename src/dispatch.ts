@@ -169,9 +169,9 @@ export function spawnDaemon(env: NodeJS.ProcessEnv = process.env): child_process
 }
 
 /**
- * Safely reads STDIN within a tight timeout without blocking.
+ * Safely reads STDIN within a defensive timeout without blocking indefinitely.
  */
-export function readStdinSafely(timeoutMs: number = 40): Promise<string> {
+export function readStdinSafely(timeoutMs: number = 200): Promise<string> {
     if (process.stdin.isTTY) {
         return Promise.resolve("");
     }
@@ -238,8 +238,8 @@ export async function runDispatch(
 
     const targetSocket = env.AGY_IPC_PATH || env.AGY_DISCORD_RPC_PIPE || getIpcAddress();
 
-    // Fast 50ms IPC delivery to avoid stalling Antigravity
-    const delivered = await sendIpcMessage(payload, 50, targetSocket);
+    // Fast 250ms IPC delivery to reliably communicate across local named pipes
+    const delivered = await sendIpcMessage(payload, 250, targetSocket);
 
     // If unreachable (or on SessionStart if daemon is not running), auto-spawn background daemon
     if (!delivered) {
@@ -248,7 +248,7 @@ export async function runDispatch(
             spawnDaemon(env);
             // Brief wait for daemon socket initialization to deliver the initial event
             await new Promise((r) => setTimeout(r, 200));
-            await sendIpcMessage(payload, 200, targetSocket);
+            await sendIpcMessage(payload, 250, targetSocket);
         }
     }
 

@@ -88,7 +88,7 @@ The plugin works out of the box with zero configuration. You can customize behav
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `AGY_DISCORD_CLIENT_ID` | `string` | `1441771215290372156` | Custom Discord Application Client ID |
+| `AGY_DISCORD_CLIENT_ID` | `string` | `1568484776703299726` | Custom Discord Application Client ID |
 | `AGY_DISCORD_PRIVACY_MODE` | `boolean` | `false` | When `true`, hides repository buttons and obscures command details |
 | `AGY_DISCORD_IDLE_TIMEOUT` | `number` | `300` | Inactivity idle timeout in seconds (default: 5 minutes) |
 | `AGY_DISCORD_SHOW_REPO_BUTTON` | `boolean` | `true` | Show clickable "View Repository" action button |

@@ -182,7 +182,7 @@ function spawnDaemon(env = process.env) {
     return null;
   }
 }
-function readStdinSafely(timeoutMs = 40) {
+function readStdinSafely(timeoutMs = 200) {
   if (process.stdin.isTTY) {
     return Promise.resolve("");
   }
@@ -227,13 +227,13 @@ async function runDispatch(argv, env = process.env, stdinInput) {
     cwd: cliPayload.cwd || stdinPayload.cwd || process.cwd()
   };
   const targetSocket = env.AGY_IPC_PATH || env.AGY_DISCORD_RPC_PIPE || getIpcAddress();
-  const delivered = await sendIpcMessage(payload, 50, targetSocket);
+  const delivered = await sendIpcMessage(payload, 250, targetSocket);
   if (!delivered) {
     const autoSpawnAllowed = env.AGY_AUTO_SPAWN !== "false" && process.env.AGY_AUTO_SPAWN !== "false";
     if (autoSpawnAllowed) {
       spawnDaemon(env);
       await new Promise((r) => setTimeout(r, 200));
-      await sendIpcMessage(payload, 200, targetSocket);
+      await sendIpcMessage(payload, 250, targetSocket);
     }
   }
   if (event === "PreToolUse") {

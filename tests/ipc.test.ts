@@ -191,7 +191,7 @@ describe("RPC Daemon Core", () => {
 
         const daemon = new RpcDaemon(
             {
-                clientId: "1441771215290372156",
+                clientId: "1568484776703299726",
                 privacyMode: false,
                 idleTimeoutSeconds: 0.05, // 50ms idle timeout for testing
                 showRepoButton: true

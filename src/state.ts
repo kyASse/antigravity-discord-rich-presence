@@ -50,7 +50,7 @@ export class PresenceStateMachine {
         let hasWaitingReview = false;
         let hasIdle = false;
 
-        const STALE_THRESHOLD_MS = 120_000; // 2 minutes
+        const STALE_THRESHOLD_MS = 30_000; // 30 seconds
 
         for (const session of this.sessions.values()) {
             if (
@@ -58,6 +58,8 @@ export class PresenceStateMachine {
                 now - session.updatedAt > STALE_THRESHOLD_MS
             ) {
                 session.status = PresenceStatus.WAITING_REVIEW;
+                session.toolName = undefined;
+                session.toolArgs = undefined;
             }
 
             switch (session.status) {
@@ -174,13 +176,13 @@ export class PresenceStateMachine {
             }
 
             case "PostInvocation": {
-                if (session.status !== PresenceStatus.EXECUTING_TOOL) {
-                    if (session.isSubagent) {
-                        session.status = PresenceStatus.STOPPED;
-                    } else {
-                        session.status = PresenceStatus.WAITING_REVIEW;
-                    }
+                if (session.isSubagent) {
+                    session.status = PresenceStatus.STOPPED;
+                } else {
+                    session.status = PresenceStatus.WAITING_REVIEW;
                 }
+                session.toolName = undefined;
+                session.toolArgs = undefined;
                 break;
             }
 
@@ -190,18 +192,30 @@ export class PresenceStateMachine {
                     if (!session.isSubagent) {
                         for (const s of this.sessions.values()) {
                             s.status = PresenceStatus.STOPPED;
+                            s.toolName = undefined;
+                            s.toolArgs = undefined;
                         }
                     } else {
                         session.status = PresenceStatus.STOPPED;
+                        session.toolName = undefined;
+                        session.toolArgs = undefined;
                     }
                 } else {
                     // Normal completion (NO_TOOL_CALL, omitted reason, MAX_INVOCATIONS, etc.)
                     if (session.isSubagent) {
                         // Subagent completes its autonomous turn
                         session.status = PresenceStatus.STOPPED;
+                        session.toolName = undefined;
+                        session.toolArgs = undefined;
                     } else {
-                        // Normal primary agent turn end -> waiting for user review
-                        session.status = PresenceStatus.WAITING_REVIEW;
+                        // Normal primary agent turn end -> all primary sessions wait for review
+                        for (const s of this.sessions.values()) {
+                            if (!s.isSubagent) {
+                                s.status = PresenceStatus.WAITING_REVIEW;
+                                s.toolName = undefined;
+                                s.toolArgs = undefined;
+                            }
+                        }
                     }
                 }
                 break;

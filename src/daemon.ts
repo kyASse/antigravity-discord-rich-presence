@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import { Client } from "@xhayper/discord-rpc";
 import { PresenceStateMachine } from "./state.js";
 import { IpcServer } from "./ipc.js";
 import {
     DEFAULT_CONFIG,
     PresenceStatus,
+    resolveConfig,
     type HookPayload,
     type PresenceActivity,
     type PluginConfig
@@ -28,6 +30,7 @@ export class RpcDaemon {
     public readonly stateMachine: PresenceStateMachine;
     public readonly ipcServer: IpcServer;
     private readonly throttleMs: number;
+    private readonly isCustomClient: boolean;
     private rpcClient: Client;
     private _isConnected = false;
     private isConnecting = false;
@@ -36,14 +39,17 @@ export class RpcDaemon {
     private lastUpdateTime = 0;
     private throttleTimer: NodeJS.Timeout | null = null;
     private pendingActivity: PresenceActivity | null | undefined = undefined;
+    private lastSentActivity: PresenceActivity | null = null;
 
     private idleTimer: NodeJS.Timeout | null = null;
+    private reconnectTimer: NodeJS.Timeout | null = null;
 
     constructor(config: PluginConfig = DEFAULT_CONFIG, options: DaemonOptions = {}) {
         this.config = config;
         this.stateMachine = new PresenceStateMachine(this.config);
         this.ipcServer = new IpcServer(options.ipcPath);
         this.throttleMs = options.throttleMs ?? 2000;
+        this.isCustomClient = Boolean(options.rpcClient);
         this.rpcClient = options.rpcClient ?? new Client({ clientId: this.config.clientId });
 
         this.setupRpcClientEvents();
@@ -84,11 +90,23 @@ export class RpcDaemon {
 
     /**
      * Connects to local Discord RPC socket defensively.
+     * Recreates the client instance if disconnected to avoid stale/destroyed sockets in @xhayper/discord-rpc.
      */
     private async connectDiscord(): Promise<void> {
         if (this._isConnected || this.isConnecting || this.isStopping) return;
         this.isConnecting = true;
         try {
+            if (!this.isCustomClient) {
+                if (this.rpcClient) {
+                    try {
+                        await this.rpcClient.destroy();
+                    } catch {
+                        // ignore
+                    }
+                }
+                this.rpcClient = new Client({ clientId: this.config.clientId });
+                this.setupRpcClientEvents();
+            }
             await this.rpcClient.login();
             this._isConnected = true;
         } catch {
@@ -99,7 +117,7 @@ export class RpcDaemon {
     }
 
     /**
-     * Starts the IPC server and connects to Discord RPC.
+     * Starts the IPC server, connects to Discord RPC, and activates auto-reconnection loop.
      */
     public async start(): Promise<void> {
         this.isStopping = false;
@@ -109,6 +127,7 @@ export class RpcDaemon {
 
         await this.ipcServer.start();
         await this.connectDiscord();
+        this.startReconnectLoop();
     }
 
     /**
@@ -116,6 +135,7 @@ export class RpcDaemon {
      */
     public async stop(): Promise<void> {
         this.isStopping = true;
+        this.stopReconnectLoop();
         this.clearIdleTimer();
         this.clearThrottleTimer();
 
@@ -151,6 +171,7 @@ export class RpcDaemon {
         const activity = await this.stateMachine.handleHook(payload);
 
         const currentStatus = this.stateMachine.getCurrentStatus();
+
         if (currentStatus === PresenceStatus.WAITING_REVIEW) {
             this.resetIdleTimer();
         } else if (currentStatus === PresenceStatus.STOPPED) {
@@ -162,12 +183,22 @@ export class RpcDaemon {
 
     /**
      * Schedules a throttled presence update to Discord to adhere to the 2-second rate limit.
+     * Transitions to WAITING_REVIEW, IDLE, or STOPPED are treated as priority and flush immediately.
      */
     private schedulePresenceUpdate(activity: PresenceActivity | null): void {
         const now = Date.now();
         const elapsed = now - this.lastUpdateTime;
 
-        if (this.throttleMs === 0 || (elapsed >= this.throttleMs && !this.throttleTimer)) {
+        const isPriorityState = activity === null ||
+            activity.smallImageKey === "hourglass" ||
+            activity.smallImageKey === "zzz";
+
+        if (this.throttleMs === 0 || isPriorityState || (elapsed >= this.throttleMs && !this.throttleTimer)) {
+            if (this.throttleTimer) {
+                clearTimeout(this.throttleTimer);
+                this.throttleTimer = null;
+            }
+            this.pendingActivity = undefined;
             this.lastUpdateTime = now;
             this.sendPresenceToDiscord(activity).catch(() => {});
             return;
@@ -199,6 +230,7 @@ export class RpcDaemon {
 
         try {
             if (activity === null) {
+                this.lastSentActivity = null;
                 if (this.rpcClient.user?.clearActivity) {
                     await this.rpcClient.user.clearActivity();
                 }
@@ -218,9 +250,40 @@ export class RpcDaemon {
                 }
 
                 await this.rpcClient.user.setActivity(presencePayload);
+                this.lastSentActivity = activity;
             }
         } catch {
             this._isConnected = false;
+        }
+    }
+
+    /**
+     * Background reconnect loop periodically checks Discord availability if disconnected.
+     */
+    private startReconnectLoop(): void {
+        this.stopReconnectLoop();
+        this.reconnectTimer = setInterval(async () => {
+            if (this.isStopping) return;
+            if (!this._isConnected) {
+                await this.connectDiscord();
+                if (this._isConnected) {
+                    const activityToRestore = this.lastSentActivity ?? this.pendingActivity;
+                    if (activityToRestore) {
+                        await this.sendPresenceToDiscord(activityToRestore);
+                    }
+                }
+            }
+        }, 5000);
+
+        if (this.reconnectTimer && typeof this.reconnectTimer.unref === "function") {
+            this.reconnectTimer.unref();
+        }
+    }
+
+    private stopReconnectLoop(): void {
+        if (this.reconnectTimer) {
+            clearInterval(this.reconnectTimer);
+            this.reconnectTimer = null;
         }
     }
 
@@ -263,7 +326,8 @@ const isDirectRun = Boolean(
 );
 
 if (isDirectRun) {
-    const daemon = new RpcDaemon();
+    const config = resolveConfig();
+    const daemon = new RpcDaemon(config);
     daemon.start().catch((err) => {
         console.error("Failed to start RPC daemon:", err);
         process.exit(1);

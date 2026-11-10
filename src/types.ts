@@ -35,8 +35,29 @@ export interface PluginConfig {
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
-    clientId: "1441771215290372156",
+    clientId: "1568484776703299726",
     privacyMode: false,
     idleTimeoutSeconds: 300,
     showRepoButton: true
 };
+
+export function resolveConfig(
+    customConfig?: Partial<PluginConfig>,
+    env: NodeJS.ProcessEnv = process.env
+): PluginConfig {
+    return {
+        clientId: env.AGY_DISCORD_CLIENT_ID || customConfig?.clientId || DEFAULT_CONFIG.clientId,
+        privacyMode:
+            env.AGY_DISCORD_PRIVACY_MODE !== undefined
+                ? env.AGY_DISCORD_PRIVACY_MODE === "true" || env.AGY_DISCORD_PRIVACY_MODE === "1"
+                : (customConfig?.privacyMode ?? DEFAULT_CONFIG.privacyMode),
+        idleTimeoutSeconds:
+            env.AGY_DISCORD_IDLE_TIMEOUT && !Number.isNaN(Number(env.AGY_DISCORD_IDLE_TIMEOUT))
+                ? Number(env.AGY_DISCORD_IDLE_TIMEOUT)
+                : (customConfig?.idleTimeoutSeconds ?? DEFAULT_CONFIG.idleTimeoutSeconds),
+        showRepoButton:
+            env.AGY_DISCORD_SHOW_REPO_BUTTON !== undefined
+                ? env.AGY_DISCORD_SHOW_REPO_BUTTON === "true" || env.AGY_DISCORD_SHOW_REPO_BUTTON === "1"
+                : (customConfig?.showRepoButton ?? DEFAULT_CONFIG.showRepoButton)
+    };
+}

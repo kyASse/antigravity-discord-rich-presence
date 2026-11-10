@@ -31371,11 +31371,19 @@ import path3 from "node:path";
 
 // src/types.ts
 var DEFAULT_CONFIG = {
-  clientId: "1441771215290372156",
+  clientId: "1568484776703299726",
   privacyMode: false,
   idleTimeoutSeconds: 300,
   showRepoButton: true
 };
+function resolveConfig(customConfig, env = process.env) {
+  return {
+    clientId: env.AGY_DISCORD_CLIENT_ID || customConfig?.clientId || DEFAULT_CONFIG.clientId,
+    privacyMode: env.AGY_DISCORD_PRIVACY_MODE !== void 0 ? env.AGY_DISCORD_PRIVACY_MODE === "true" || env.AGY_DISCORD_PRIVACY_MODE === "1" : customConfig?.privacyMode ?? DEFAULT_CONFIG.privacyMode,
+    idleTimeoutSeconds: env.AGY_DISCORD_IDLE_TIMEOUT && !Number.isNaN(Number(env.AGY_DISCORD_IDLE_TIMEOUT)) ? Number(env.AGY_DISCORD_IDLE_TIMEOUT) : customConfig?.idleTimeoutSeconds ?? DEFAULT_CONFIG.idleTimeoutSeconds,
+    showRepoButton: env.AGY_DISCORD_SHOW_REPO_BUTTON !== void 0 ? env.AGY_DISCORD_SHOW_REPO_BUTTON === "true" || env.AGY_DISCORD_SHOW_REPO_BUTTON === "1" : customConfig?.showRepoButton ?? DEFAULT_CONFIG.showRepoButton
+  };
+}
 
 // src/sanitizer.ts
 import path from "node:path";
@@ -31617,10 +31625,12 @@ var PresenceStateMachine = class {
     let hasThinking = false;
     let hasWaitingReview = false;
     let hasIdle = false;
-    const STALE_THRESHOLD_MS = 12e4;
+    const STALE_THRESHOLD_MS = 3e4;
     for (const session of this.sessions.values()) {
       if ((session.status === "EXECUTING_TOOL" /* EXECUTING_TOOL */ || session.status === "THINKING" /* THINKING */) && now - session.updatedAt > STALE_THRESHOLD_MS) {
         session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
+        session.toolName = void 0;
+        session.toolArgs = void 0;
       }
       switch (session.status) {
         case "EXECUTING_TOOL" /* EXECUTING_TOOL */:
@@ -31720,13 +31730,13 @@ var PresenceStateMachine = class {
         break;
       }
       case "PostInvocation": {
-        if (session.status !== "EXECUTING_TOOL" /* EXECUTING_TOOL */) {
-          if (session.isSubagent) {
-            session.status = "STOPPED" /* STOPPED */;
-          } else {
-            session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
-          }
+        if (session.isSubagent) {
+          session.status = "STOPPED" /* STOPPED */;
+        } else {
+          session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
         }
+        session.toolName = void 0;
+        session.toolArgs = void 0;
         break;
       }
       case "Stop": {
@@ -31734,15 +31744,27 @@ var PresenceStateMachine = class {
           if (!session.isSubagent) {
             for (const s of this.sessions.values()) {
               s.status = "STOPPED" /* STOPPED */;
+              s.toolName = void 0;
+              s.toolArgs = void 0;
             }
           } else {
             session.status = "STOPPED" /* STOPPED */;
+            session.toolName = void 0;
+            session.toolArgs = void 0;
           }
         } else {
           if (session.isSubagent) {
             session.status = "STOPPED" /* STOPPED */;
+            session.toolName = void 0;
+            session.toolArgs = void 0;
           } else {
-            session.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
+            for (const s of this.sessions.values()) {
+              if (!s.isSubagent) {
+                s.status = "WAITING_REVIEW" /* WAITING_REVIEW */;
+                s.toolName = void 0;
+                s.toolArgs = void 0;
+              }
+            }
           }
         }
         break;
@@ -32012,6 +32034,7 @@ var RpcDaemon = class {
   stateMachine;
   ipcServer;
   throttleMs;
+  isCustomClient;
   rpcClient;
   _isConnected = false;
   isConnecting = false;
@@ -32019,12 +32042,15 @@ var RpcDaemon = class {
   lastUpdateTime = 0;
   throttleTimer = null;
   pendingActivity = void 0;
+  lastSentActivity = null;
   idleTimer = null;
+  reconnectTimer = null;
   constructor(config = DEFAULT_CONFIG, options = {}) {
     this.config = config;
     this.stateMachine = new PresenceStateMachine(this.config);
     this.ipcServer = new IpcServer(options.ipcPath);
     this.throttleMs = options.throttleMs ?? 2e3;
+    this.isCustomClient = Boolean(options.rpcClient);
     this.rpcClient = options.rpcClient ?? new import_discord_rpc.Client({ clientId: this.config.clientId });
     this.setupRpcClientEvents();
   }
@@ -32058,11 +32084,22 @@ var RpcDaemon = class {
   }
   /**
    * Connects to local Discord RPC socket defensively.
+   * Recreates the client instance if disconnected to avoid stale/destroyed sockets in @xhayper/discord-rpc.
    */
   async connectDiscord() {
     if (this._isConnected || this.isConnecting || this.isStopping) return;
     this.isConnecting = true;
     try {
+      if (!this.isCustomClient) {
+        if (this.rpcClient) {
+          try {
+            await this.rpcClient.destroy();
+          } catch {
+          }
+        }
+        this.rpcClient = new import_discord_rpc.Client({ clientId: this.config.clientId });
+        this.setupRpcClientEvents();
+      }
       await this.rpcClient.login();
       this._isConnected = true;
     } catch {
@@ -32072,7 +32109,7 @@ var RpcDaemon = class {
     }
   }
   /**
-   * Starts the IPC server and connects to Discord RPC.
+   * Starts the IPC server, connects to Discord RPC, and activates auto-reconnection loop.
    */
   async start() {
     this.isStopping = false;
@@ -32081,12 +32118,14 @@ var RpcDaemon = class {
     };
     await this.ipcServer.start();
     await this.connectDiscord();
+    this.startReconnectLoop();
   }
   /**
    * Gracefully stops the daemon, clears Discord Rich Presence, and shuts down IPC.
    */
   async stop() {
     this.isStopping = true;
+    this.stopReconnectLoop();
     this.clearIdleTimer();
     this.clearThrottleTimer();
     if (this._isConnected && this.rpcClient.user?.clearActivity) {
@@ -32122,11 +32161,18 @@ var RpcDaemon = class {
   }
   /**
    * Schedules a throttled presence update to Discord to adhere to the 2-second rate limit.
+   * Transitions to WAITING_REVIEW, IDLE, or STOPPED are treated as priority and flush immediately.
    */
   schedulePresenceUpdate(activity) {
     const now = Date.now();
     const elapsed = now - this.lastUpdateTime;
-    if (this.throttleMs === 0 || elapsed >= this.throttleMs && !this.throttleTimer) {
+    const isPriorityState = activity === null || activity.smallImageKey === "hourglass" || activity.smallImageKey === "zzz";
+    if (this.throttleMs === 0 || isPriorityState || elapsed >= this.throttleMs && !this.throttleTimer) {
+      if (this.throttleTimer) {
+        clearTimeout(this.throttleTimer);
+        this.throttleTimer = null;
+      }
+      this.pendingActivity = void 0;
       this.lastUpdateTime = now;
       this.sendPresenceToDiscord(activity).catch(() => {
       });
@@ -32157,6 +32203,7 @@ var RpcDaemon = class {
     }
     try {
       if (activity === null) {
+        this.lastSentActivity = null;
         if (this.rpcClient.user?.clearActivity) {
           await this.rpcClient.user.clearActivity();
         }
@@ -32174,9 +32221,37 @@ var RpcDaemon = class {
           presencePayload.buttons = activity.buttons;
         }
         await this.rpcClient.user.setActivity(presencePayload);
+        this.lastSentActivity = activity;
       }
     } catch {
       this._isConnected = false;
+    }
+  }
+  /**
+   * Background reconnect loop periodically checks Discord availability if disconnected.
+   */
+  startReconnectLoop() {
+    this.stopReconnectLoop();
+    this.reconnectTimer = setInterval(async () => {
+      if (this.isStopping) return;
+      if (!this._isConnected) {
+        await this.connectDiscord();
+        if (this._isConnected) {
+          const activityToRestore = this.lastSentActivity ?? this.pendingActivity;
+          if (activityToRestore) {
+            await this.sendPresenceToDiscord(activityToRestore);
+          }
+        }
+      }
+    }, 5e3);
+    if (this.reconnectTimer && typeof this.reconnectTimer.unref === "function") {
+      this.reconnectTimer.unref();
+    }
+  }
+  stopReconnectLoop() {
+    if (this.reconnectTimer) {
+      clearInterval(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
   }
   resetIdleTimer() {
@@ -32210,7 +32285,8 @@ var isDirectRun = Boolean(
   process.argv[1] && (process.argv[1].endsWith("daemon.js") || process.argv[1].endsWith("daemon.ts")) && !process.argv[1].includes("test")
 );
 if (isDirectRun) {
-  const daemon = new RpcDaemon();
+  const config = resolveConfig();
+  const daemon = new RpcDaemon(config);
   daemon.start().catch((err) => {
     console.error("Failed to start RPC daemon:", err);
     process.exit(1);

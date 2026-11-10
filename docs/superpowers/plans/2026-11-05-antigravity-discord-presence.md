@@ -12,7 +12,7 @@
 
 ## Global Constraints
 - Target platform: Antigravity 2.0 (Antigravity App Desktop) on Windows, macOS, and Linux.
-- Default Discord Client ID: `1441771215290372156`.
+- Default Discord Client ID: `1568484776703299726`.
 - Update rate limit: Maximum 1 Discord RPC update per 2 seconds (throttled).
 - Inactivity idle timeout: 300 seconds (5 minutes) before transitioning from `Waiting Review` to `Idle`.
 - Zero-latency requirement: CLI dispatcher must complete within <50ms without blocking Antigravity hook execution.
@@ -59,7 +59,7 @@ describe("Types & Defaults", () => {
         assert.equal(PresenceStatus.WAITING_REVIEW, "WAITING_REVIEW");
         assert.equal(PresenceStatus.IDLE, "IDLE");
         assert.equal(PresenceStatus.STOPPED, "STOPPED");
-        assert.equal(DEFAULT_CONFIG.clientId, "1441771215290372156");
+        assert.equal(DEFAULT_CONFIG.clientId, "1568484776703299726");
         assert.equal(DEFAULT_CONFIG.idleTimeoutSeconds, 300);
         assert.equal(DEFAULT_CONFIG.privacyMode, false);
     });
