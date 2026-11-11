@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { IpcServer, sendIpcMessage, getIpcAddress, probeSocketActive } from "../src/ipc";
 import { RpcDaemon } from "../src/daemon";
-import { HookPayload, PresenceStatus, encodeInitialPayload } from "../src/types";
+import { HookPayload, PresenceStatus, encodeInitialPayload, DEFAULT_CONFIG } from "../src/types";
 
 describe("Local IPC Channel", () => {
     let server: IpcServer;
@@ -195,7 +195,7 @@ describe("RPC Daemon Core", () => {
         // Fire 3 quick events
         await daemon.handlePayload({ event: "PreInvocation", conversationId: "c1" });
         await daemon.handlePayload({ event: "PreToolUse", conversationId: "c1", toolName: "read_file" });
-        await daemon.handlePayload({ event: "PostToolUse", conversationId: "c1" });
+        await daemon.handlePayload({ event: "Stop", conversationId: "c1", terminationReason: "NO_TOOL_CALL" });
 
         // First one went through immediately, rest are throttled
         assert.equal(updateCount, 1);
@@ -286,5 +286,105 @@ describe("RPC Daemon Core", () => {
         assert.match(lastActivity?.details, /Idling in workspace/);
 
         await daemon.stop();
+    });
+
+    it("deduplicates identical consecutive presence payloads while connected", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-dedup-${process.pid}`
+            : `/tmp/agy-daemon-dedup-${process.pid}.sock`;
+        const setCalls: any[] = [];
+        const mockRpc = {
+            login: async () => {},
+            destroy: async () => {},
+            user: { setActivity: async (a: any) => setCalls.push(a), clearActivity: async () => {} }
+        };
+        const daemon = new RpcDaemon(undefined, { ipcPath: testPipe, throttleMs: 50, rpcClient: mockRpc as any });
+        await daemon.start();
+        await daemon.handlePayload({ event: "PreInvocation", conversationId: "c1" });
+        await daemon.handlePayload({ event: "PreToolUse", conversationId: "c1", toolName: "read_file" });
+        await daemon.handlePayload({ event: "PostToolUse", conversationId: "c1" });
+        await new Promise((r) => setTimeout(r, 80));
+        assert.equal(setCalls.length, 1);
+
+        await daemon.handlePayload({ event: "Stop", conversationId: "c1", terminationReason: "NO_TOOL_CALL" });
+        await new Promise((r) => setTimeout(r, 80));
+        assert.equal(setCalls.length, 2);
+        await daemon.stop();
+    });
+
+    it("reconnects with backoff when Discord is unavailable or disconnects and re-syncs identical presence", async () => {
+        const { EventEmitter } = await import("node:events");
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-reconnect-${process.pid}`
+            : `/tmp/agy-daemon-reconnect-${process.pid}.sock`;
+        let attempts = 0;
+        const setCalls: any[] = [];
+        const mockRpc: any = new EventEmitter();
+        mockRpc.login = async () => {
+            attempts++;
+            if (attempts <= 2) throw new Error("Discord closed");
+        };
+        mockRpc.destroy = async () => {};
+        mockRpc.user = { setActivity: async (a: any) => setCalls.push(a), clearActivity: async () => {} };
+
+        const daemon = new RpcDaemon(undefined, {
+            ipcPath: testPipe,
+            throttleMs: 0,
+            reconnectBaseMs: 25,
+            reconnectMaxMs: 50,
+            rpcClient: mockRpc
+        });
+        await daemon.start(); // attempt 1 fails
+        await daemon.handlePayload({ event: "PreInvocation", conversationId: "c1" }); // attempt 2 fails
+        assert.equal(daemon.isConnected, false);
+        assert.equal(setCalls.length, 0);
+
+        // Background reconnect timer (attempt 3) succeeds with no new hook and re-syncs
+        await new Promise((r) => setTimeout(r, 120));
+        assert.equal(daemon.isConnected, true);
+        assert.equal(setCalls.length, 1);
+        assert.match(setCalls[0].details ?? "", /Agent is thinking/);
+
+        // Simulate disconnect while holding identical state, verify re-sync bypasses dedup cache
+        mockRpc.emit("disconnected");
+        assert.equal(daemon.isConnected, false);
+        await new Promise((r) => setTimeout(r, 80));
+        assert.equal(daemon.isConnected, true);
+        assert.equal(setCalls.length, 2);
+        await daemon.stop();
+    });
+
+    it("applies 2-tier inactivity watchdog without interrupting WAITING_REVIEW before idle timeout", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-watchdog-${process.pid}`
+            : `/tmp/agy-daemon-watchdog-${process.pid}.sock`;
+        let exitCount = 0;
+        const mockRpc = {
+            login: async () => {},
+            destroy: async () => {},
+            user: { setActivity: async () => {}, clearActivity: async () => {} }
+        };
+        const daemon = new RpcDaemon(
+            { ...DEFAULT_CONFIG, idleTimeoutSeconds: 0.08 },
+            {
+                ipcPath: testPipe,
+                throttleMs: 0,
+                watchdogMs: 40,
+                activeWatchdogMs: 500,
+                onWatchdogExit: () => { exitCount++; },
+                rpcClient: mockRpc as any
+            }
+        );
+        await daemon.start();
+        await daemon.handlePayload({ event: "PreInvocation", conversationId: "c1" });
+        await daemon.handlePayload({ event: "Stop", conversationId: "c1", terminationReason: "NO_TOOL_CALL" });
+
+        await new Promise((r) => setTimeout(r, 50));
+        assert.equal(exitCount, 0);
+        assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+
+        await new Promise((r) => setTimeout(r, 90));
+        assert.equal(exitCount, 1);
+        assert.equal(daemon.ipcServer.isListening, false);
     });
 });
