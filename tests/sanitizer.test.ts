@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeGitUrl, sanitizeCommand, mapToolToAction } from "../src/sanitizer";
+import {
+    sanitizeGitUrl,
+    sanitizeCommand,
+    mapToolToAction,
+    truncateRpcText,
+    validateRpcButtonUrl
+} from "../src/sanitizer";
 
 describe("Sanitizer", () => {
     it("strips credentials from HTTP/HTTPS/SSH git remote urls", () => {
@@ -71,5 +77,35 @@ describe("Sanitizer", () => {
         assert.equal(mapToolToAction("invoke_subagent", {}), "Dispatching Subagent");
         assert.equal(mapToolToAction("search_web", {}), "Searching web documentation");
         assert.equal(mapToolToAction("unknown_tool", {}), "Executing unknown_tool");
+    });
+
+    it("truncates RPC fields cleanly by Unicode codepoints and enforces >= 2 chars", () => {
+        assert.equal(truncateRpcText("a", 128), undefined);
+        assert.equal(truncateRpcText("  ", 128), undefined);
+        assert.equal(truncateRpcText("ab", 128), "ab");
+        const longEmoji = "🚀".repeat(140);
+        const truncated = truncateRpcText(longEmoji, 128)!;
+        assert.equal(Array.from(truncated).length, 128);
+        assert.ok(truncated.endsWith("..."));
+        assert.ok(!truncated.includes("\uFFFD"));
+
+        const mixed = "a".repeat(126) + "🚀".repeat(3);
+        const truncatedMixed = truncateRpcText(mixed, 128)!;
+        assert.equal(Array.from(truncatedMixed).length, 128);
+        assert.ok(truncatedMixed.endsWith("..."));
+        assert.ok(!truncatedMixed.includes("\uFFFD"));
+    });
+
+    it("validates RPC button URL scheme and 512-char limit", () => {
+        assert.equal(validateRpcButtonUrl("https://github.com/org/repo"), "https://github.com/org/repo");
+        assert.equal(validateRpcButtonUrl("ftp://example.com/repo"), undefined);
+        assert.equal(validateRpcButtonUrl("https://github.com/" + "a".repeat(500)), undefined);
+    });
+
+    it("sanitizes toolSummary secrets when privacyMode is false", () => {
+        assert.equal(
+            mapToolToAction("run_command", { toolSummary: "Deploy using TOKEN=ghp_1234567890abcdef" }, false),
+            "Running: Deploy using TOKEN=***"
+        );
     });
 });
