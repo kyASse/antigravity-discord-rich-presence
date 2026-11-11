@@ -1,10 +1,11 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { IpcServer } from "../src/ipc.js";
 import { runDispatch, parseCliArgs, parseStdin } from "../src/dispatch.js";
-import { HookPayload } from "../src/types.js";
+import { HookPayload, decodeInitialPayload } from "../src/types.js";
 
 describe("CLI Dispatcher", () => {
     let server: IpcServer;
@@ -118,6 +119,37 @@ describe("CLI Dispatcher", () => {
 
         const preInvocResult = await runDispatch(["--event", "PreInvocation", "--conversationId", "c-1"], { ...process.env, AGY_IPC_PATH: testPipe });
         assert.deepEqual(preInvocResult, {});
+    });
+
+    it("passes AGY_INITIAL_PAYLOAD in spawned daemon env on cold start without mutating parent env", async () => {
+        const tmpOut = path.join(os.tmpdir(), `agy-coldstart-${process.pid}-${Date.now()}.json`);
+        const fakeDaemon = path.join(os.tmpdir(), `agy-fake-daemon-${process.pid}-${Date.now()}.mjs`);
+        fs.writeFileSync(
+            fakeDaemon,
+            `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(tmpOut)}, process.env.AGY_INITIAL_PAYLOAD ?? "");`,
+            "utf-8"
+        );
+        try {
+            await runDispatch(
+                ["--event", "SessionStart", "--conversationId", "cold-1"],
+                {
+                    ...process.env,
+                    AGY_IPC_PATH: process.platform === "win32"
+                        ? `\\\\.\\pipe\\agy-coldstart-missing-${process.pid}`
+                        : `/tmp/agy-coldstart-missing-${process.pid}.sock`,
+                    AGY_DAEMON_PATH: fakeDaemon,
+                    AGY_AUTO_SPAWN: "true"
+                }
+            );
+            // Wait briefly for child process to write file
+            await new Promise((r) => setTimeout(r, 250));
+            const written = fs.readFileSync(tmpOut, "utf-8");
+            assert.equal(decodeInitialPayload(written)?.conversationId, "cold-1");
+            assert.equal(process.env.AGY_INITIAL_PAYLOAD, undefined);
+        } finally {
+            fs.rmSync(tmpOut, { force: true });
+            fs.rmSync(fakeDaemon, { force: true });
+        }
     });
 });
 

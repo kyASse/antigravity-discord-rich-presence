@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { IpcServer, sendIpcMessage, getIpcAddress, probeSocketActive } from "../src/ipc";
 import { RpcDaemon } from "../src/daemon";
-import { HookPayload, PresenceStatus } from "../src/types";
+import { HookPayload, PresenceStatus, encodeInitialPayload } from "../src/types";
 
 describe("Local IPC Channel", () => {
     let server: IpcServer;
@@ -138,6 +138,31 @@ describe("RPC Daemon Core", () => {
         assert.match(setActivityCalls[setActivityCalls.length - 1].details, /Agent is thinking/);
 
         await daemon.stop();
+    });
+
+    it("processes AGY_INITIAL_PAYLOAD on start and ignores malformed payloads", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-coldstart-${process.pid}`
+            : `/tmp/agy-daemon-coldstart-${process.pid}.sock`;
+        const calls: any[] = [];
+        const mockRpc = {
+            login: async () => {},
+            destroy: async () => {},
+            user: { setActivity: async (a: any) => calls.push(a), clearActivity: async () => {} }
+        };
+        process.env.AGY_INITIAL_PAYLOAD = encodeInitialPayload({ event: "SessionStart", conversationId: "cold-start" });
+        const daemon = new RpcDaemon(undefined, { ipcPath: testPipe, throttleMs: 0, rpcClient: mockRpc as any });
+        await daemon.start();
+        assert.equal(process.env.AGY_INITIAL_PAYLOAD, undefined);
+        assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.THINKING);
+        assert.ok(calls.length >= 1);
+        await daemon.stop();
+
+        process.env.AGY_INITIAL_PAYLOAD = "corrupt!!!";
+        const daemon2 = new RpcDaemon(undefined, { ipcPath: testPipe, throttleMs: 0, rpcClient: mockRpc as any });
+        await assert.doesNotReject(() => daemon2.start());
+        assert.equal(process.env.AGY_INITIAL_PAYLOAD, undefined);
+        await daemon2.stop();
     });
 
     it("throttles rapid presence updates using configured throttleMs", async () => {

@@ -5,6 +5,7 @@ import {
     DEFAULT_CONFIG,
     loadConfigFromEnv,
     PresenceStatus,
+    decodeInitialPayload,
     type HookPayload,
     type PresenceActivity,
     type PluginConfig
@@ -109,7 +110,16 @@ export class RpcDaemon {
         };
 
         await this.ipcServer.start();
+
+        const rawInitialPayload = process.env.AGY_INITIAL_PAYLOAD;
+        delete process.env.AGY_INITIAL_PAYLOAD;
+
         await this.connectDiscord();
+
+        const initialPayload = decodeInitialPayload(rawInitialPayload);
+        if (initialPayload) {
+            await this.handlePayload(initialPayload);
+        }
     }
 
     /**
