@@ -46,6 +46,12 @@ export class IpcServer {
 
         // Clean up stale Unix domain socket if it exists on disk
         if (process.platform !== "win32" && fs.existsSync(this.path)) {
+            const active = await probeSocketActive(this.path, 50);
+            if (active) {
+                const err = new Error(`EADDRINUSE: address already in use ${this.path}`);
+                (err as any).code = "EADDRINUSE";
+                throw err;
+            }
             try {
                 fs.unlinkSync(this.path);
             } catch {
@@ -195,3 +201,50 @@ export function sendIpcMessage(
         });
     });
 }
+
+/**
+ * Probes whether a named pipe or Unix domain socket is active and accepting connections.
+ * Resolves true if connected, false on timeout, error, or if unreachable.
+ * Ensures all timers and listeners are cleaned up and the socket destroyed.
+ */
+export function probeSocketActive(
+    socketPath: string,
+    timeoutMs: number = 50
+): Promise<boolean> {
+    return new Promise((resolve) => {
+        let settled = false;
+        let client: net.Socket | null = null;
+
+        const finish = (result: boolean) => {
+            if (!settled) {
+                settled = true;
+                if (client) {
+                    try {
+                        client.setTimeout(0);
+                    } catch {
+                        // ignore
+                    }
+                    client.removeAllListeners();
+                    try {
+                        client.destroy();
+                    } catch {
+                        // ignore
+                    }
+                }
+                resolve(result);
+            }
+        };
+
+        try {
+            client = net.createConnection(socketPath);
+            client.setTimeout(timeoutMs);
+            client.once("connect", () => finish(true));
+            client.once("timeout", () => finish(false));
+            client.once("error", () => finish(false));
+            client.once("close", () => finish(false));
+        } catch {
+            finish(false);
+        }
+    });
+}
+

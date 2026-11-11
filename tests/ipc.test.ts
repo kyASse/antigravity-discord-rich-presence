@@ -1,6 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { IpcServer, sendIpcMessage, getIpcAddress } from "../src/ipc";
+import fs from "node:fs";
+import { IpcServer, sendIpcMessage, getIpcAddress, probeSocketActive } from "../src/ipc";
 import { RpcDaemon } from "../src/daemon";
 import { HookPayload, PresenceStatus } from "../src/types";
 
@@ -17,6 +18,44 @@ describe("Local IPC Channel", () => {
 
     after(async () => {
         await server.stop();
+    });
+
+    it("detects whether an existing IPC endpoint has a live listener", async () => {
+        const activePipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-probe-active-${process.pid}`
+            : `/tmp/agy-probe-active-${process.pid}.sock`;
+        const srv = new IpcServer(activePipe);
+        await srv.start();
+        try {
+            assert.equal(await probeSocketActive(activePipe, 100), true);
+        } finally {
+            await srv.stop();
+        }
+        assert.equal(await probeSocketActive(activePipe, 100), false);
+    });
+
+    it("rejects with EADDRINUSE on Unix when socket is active and unlinks when inactive", { skip: process.platform === "win32" ? "Unix domain sockets only" : false }, async () => {
+        const socketPath = `/tmp/agy-probe-eaddrinuse-${process.pid}.sock`;
+        const srv1 = new IpcServer(socketPath);
+        await srv1.start();
+        try {
+            const srv2 = new IpcServer(socketPath);
+            await assert.rejects(srv2.start(), (err: any) => {
+                return err?.code === "EADDRINUSE" && err?.message?.includes("already in use");
+            });
+        } finally {
+            await srv1.stop();
+        }
+
+        // Stale socket simulation: write a dummy file at socketPath
+        fs.writeFileSync(socketPath, "stale");
+        assert.equal(fs.existsSync(socketPath), true);
+
+        const srv3 = new IpcServer(socketPath);
+        await srv3.start(); // Should probe, see inactive, unlink, and start
+        assert.equal(srv3.isListening, true);
+        await srv3.stop();
+        assert.equal(fs.existsSync(socketPath), false);
     });
 
     it("successfully sends and receives hook payloads across local IPC socket", async () => {
