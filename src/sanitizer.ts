@@ -206,6 +206,10 @@ export function truncateRpcText(value: string | undefined, maxLength: number): s
         return undefined;
     }
 
+    if (typeof maxLength !== "number" || Number.isNaN(maxLength) || maxLength < 2) {
+        return undefined;
+    }
+
     const trimmed = value.trim();
     const chars = Array.from(trimmed);
 

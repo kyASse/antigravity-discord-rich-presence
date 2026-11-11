@@ -101,8 +101,8 @@ describe("Local IPC Channel", () => {
 describe("RPC Daemon Core", () => {
     it("coordinates IPC messages into state machine transitions", async () => {
         const testPipe = process.platform === "win32"
-            ? "\\\\.\\pipe\\agy-daemon-test-pipe-1"
-            : "/tmp/agy-daemon-test-1.sock";
+            ? `\\\\.\\pipe\\agy-daemon-test-pipe-1-${process.pid}`
+            : `/tmp/agy-daemon-test-1-${process.pid}.sock`;
 
         // Mock RPC client
         const setActivityCalls: any[] = [];
@@ -167,8 +167,8 @@ describe("RPC Daemon Core", () => {
 
     it("throttles rapid presence updates using configured throttleMs", async () => {
         const testPipe = process.platform === "win32"
-            ? "\\\\.\\pipe\\agy-daemon-test-pipe-2"
-            : "/tmp/agy-daemon-test-2.sock";
+            ? `\\\\.\\pipe\\agy-daemon-test-pipe-2-${process.pid}`
+            : `/tmp/agy-daemon-test-2-${process.pid}.sock`;
 
         let updateCount = 0;
         const mockRpcClient = {
@@ -217,8 +217,8 @@ describe("RPC Daemon Core", () => {
         };
 
         const testPipe = process.platform === "win32"
-            ? "\\\\.\\pipe\\agy-daemon-test-pipe-3"
-            : "/tmp/agy-daemon-test-3.sock";
+            ? `\\\\.\\pipe\\agy-daemon-test-pipe-3-${process.pid}`
+            : `/tmp/agy-daemon-test-3-${process.pid}.sock`;
 
         const daemon = new RpcDaemon(undefined, {
             ipcPath: testPipe,
@@ -238,8 +238,8 @@ describe("RPC Daemon Core", () => {
 
     it("triggers idle timeout transition when inactive in WAITING_REVIEW", async () => {
         const testPipe = process.platform === "win32"
-            ? "\\\\.\\pipe\\agy-daemon-test-pipe-4"
-            : "/tmp/agy-daemon-test-4.sock";
+            ? `\\\\.\\pipe\\agy-daemon-test-pipe-4-${process.pid}`
+            : `/tmp/agy-daemon-test-4-${process.pid}.sock`;
 
         let lastActivity: any = null;
         const mockRpcClient = {
@@ -386,5 +386,124 @@ describe("RPC Daemon Core", () => {
         await new Promise((r) => setTimeout(r, 90));
         assert.equal(exitCount, 1);
         assert.equal(daemon.ipcServer.isListening, false);
+    });
+
+    it("decouples zombie client listeners during reconnection so old client events do not affect daemon", async () => {
+        const { EventEmitter } = await import("node:events");
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-zombie-${process.pid}`
+            : `/tmp/agy-daemon-zombie-${process.pid}.sock`;
+
+        const clients: any[] = [];
+        const clientFactory = () => {
+            const client: any = new EventEmitter();
+            client.transport = new EventEmitter();
+            const clientIndex = clients.length;
+            client.login = async () => {
+                if (clientIndex === 0) {
+                    throw new Error("First client failed");
+                }
+            };
+            client.destroy = async () => {};
+            client.user = {
+                setActivity: async () => {},
+                clearActivity: async () => {}
+            };
+            clients.push(client);
+            return client;
+        };
+
+        const daemon = new RpcDaemon(undefined, {
+            ipcPath: testPipe,
+            throttleMs: 0,
+            reconnectBaseMs: 25,
+            reconnectMaxMs: 50,
+            clientFactory: clientFactory as any
+        });
+
+        try {
+            await daemon.start(); // client 0 fails to login, schedules reconnect
+            assert.equal(daemon.isConnected, false);
+            assert.equal(clients.length, 1);
+
+            // Wait for reconnect to trigger and succeed with client 1
+            await new Promise((r) => setTimeout(r, 80));
+            assert.equal(daemon.isConnected, true);
+            assert.equal(clients.length, 2);
+
+            // Now emit disconnected or error on discarded client 0
+            clients[0].emit("disconnected");
+            clients[0].emit("error", new Error("zombie error"));
+            clients[0].transport.emit("error", new Error("transport error"));
+
+            // daemon.isConnected should still be true!
+            assert.equal(daemon.isConnected, true);
+        } finally {
+            await daemon.stop();
+        }
+    });
+
+    it("preserves newer IPC state arriving mid-login over cold-start AGY_INITIAL_PAYLOAD", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-coldstart-inversion-${process.pid}`
+            : `/tmp/agy-daemon-coldstart-inversion-${process.pid}.sock`;
+
+        const setCalls: any[] = [];
+        const mockRpc = {
+            login: async () => {
+                // Simulate login taking ~30ms while an IPC message arrives
+                await new Promise((r) => setTimeout(r, 30));
+            },
+            destroy: async () => {},
+            user: {
+                setActivity: async (a: any) => {
+                    setCalls.push(a);
+                    return a;
+                },
+                clearActivity: async () => {}
+            }
+        };
+
+        process.env.AGY_INITIAL_PAYLOAD = encodeInitialPayload({
+            event: "SessionStart",
+            conversationId: "cold-inversion"
+        });
+
+        const daemon = new RpcDaemon(undefined, {
+            ipcPath: testPipe,
+            throttleMs: 0,
+            rpcClient: mockRpc as any
+        });
+
+        try {
+            // Start daemon in background
+            const startPromise = daemon.start();
+
+            // Wait until IPC server is listening and login is in flight
+            while (!daemon.ipcServer.isListening) {
+                await new Promise((r) => setTimeout(r, 5));
+            }
+
+            const sent = await sendIpcMessage(
+                {
+                    event: "PreToolUse",
+                    conversationId: "cold-inversion",
+                    toolName: "read_file",
+                    toolArgs: { Path: "src/daemon.ts" }
+                },
+                500,
+                testPipe
+            );
+            assert.equal(sent, true);
+
+            await startPromise;
+
+            assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+            assert.ok(setCalls.length >= 1);
+            const lastCall = setCalls[setCalls.length - 1];
+            assert.match(lastCall.details ?? "", /Reading daemon\.ts/);
+        } finally {
+            await daemon.stop();
+        }
     });
 });

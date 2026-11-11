@@ -90,16 +90,48 @@ export class RpcDaemon {
         return new Client({ clientId: this.config.clientId });
     }
 
+    private detachRpcClientEvents(client?: Client): void {
+        if (!client) return;
+
+        try {
+            if (typeof (client as any).removeAllListeners === "function") {
+                (client as any).removeAllListeners();
+            }
+            if (typeof (client as any).on === "function") {
+                (client as any).on("error", () => {});
+            }
+        } catch {
+            // ignore
+        }
+
+        try {
+            if (client.transport) {
+                if (typeof (client.transport as any).removeAllListeners === "function") {
+                    (client.transport as any).removeAllListeners();
+                }
+                if (typeof (client.transport as any).on === "function") {
+                    (client.transport as any).on("error", () => {});
+                }
+            }
+        } catch {
+            // ignore
+        }
+    }
+
     private setupRpcClientEvents(): void {
         if (!this.rpcClient) return;
 
+        const client = this.rpcClient;
+
         const onConnect = () => {
+            if (this.rpcClient !== client) return;
             this._isConnected = true;
             this.reconnectAttempt = 0;
             this.clearReconnectTimer();
         };
 
         const onDisconnect = () => {
+            if (this.rpcClient !== client) return;
             this._isConnected = false;
             this.lastSentSignature = undefined;
             if (!this.isStopping) {
@@ -107,17 +139,17 @@ export class RpcDaemon {
             }
         };
 
-        if (typeof (this.rpcClient as any).on === "function") {
-            (this.rpcClient as any).on("ready", onConnect);
-            (this.rpcClient as any).on("connected", onConnect);
-            (this.rpcClient as any).on("disconnected", onDisconnect);
-            (this.rpcClient as any).on("error", onDisconnect);
+        if (typeof (client as any).on === "function") {
+            (client as any).on("ready", onConnect);
+            (client as any).on("connected", onConnect);
+            (client as any).on("disconnected", onDisconnect);
+            (client as any).on("error", onDisconnect);
         }
 
         // Catch low-level transport errors to prevent unhandled node exceptions
-        if (this.rpcClient.transport && typeof (this.rpcClient.transport as any).on === "function") {
-            (this.rpcClient.transport as any).on("error", onDisconnect);
-            (this.rpcClient.transport as any).on("close", onDisconnect);
+        if (client.transport && typeof (client.transport as any).on === "function") {
+            (client.transport as any).on("error", onDisconnect);
+            (client.transport as any).on("close", onDisconnect);
         }
     }
 
@@ -131,6 +163,7 @@ export class RpcDaemon {
 
         try {
             if (!this.hasCustomClient && this.reconnectAttempt > 0) {
+                this.detachRpcClientEvents(this.rpcClient);
                 try {
                     if (this.rpcClient?.destroy) {
                         await this.rpcClient.destroy();
@@ -195,11 +228,10 @@ export class RpcDaemon {
      */
     public async start(): Promise<void> {
         this.isStopping = false;
-        this.ipcServer.onMessage = async (payload: HookPayload) => {
-            await this.handlePayload(payload);
-        };
 
-        await this.ipcServer.start();
+        const rawInitialPayload = process.env.AGY_INITIAL_PAYLOAD;
+        delete process.env.AGY_INITIAL_PAYLOAD;
+        const initialPayload = decodeInitialPayload(rawInitialPayload);
 
         // Warm up git metadata cache so subsequent hook processing does not block timers
         try {
@@ -208,16 +240,22 @@ export class RpcDaemon {
             // ignore
         }
 
-        const rawInitialPayload = process.env.AGY_INITIAL_PAYLOAD;
-        delete process.env.AGY_INITIAL_PAYLOAD;
+        if (initialPayload) {
+            await this.applyHookToState(initialPayload);
+        } else {
+            this.resetWatchdogTimer(this.stateMachine.getCurrentStatus());
+        }
 
-        this.resetWatchdogTimer(this.stateMachine.getCurrentStatus());
+        this.ipcServer.onMessage = async (payload: HookPayload) => {
+            await this.handlePayload(payload);
+        };
+        await this.ipcServer.start();
 
         await this.connectDiscord();
 
-        const initialPayload = decodeInitialPayload(rawInitialPayload);
-        if (initialPayload) {
-            await this.handlePayload(initialPayload);
+        if (this._isConnected && this.stateMachine.getCurrentStatus() !== PresenceStatus.STOPPED && !this.lastSentSignature) {
+            this.lastUpdateTime = Date.now();
+            await this.reSyncPresence();
         }
     }
 
@@ -239,6 +277,7 @@ export class RpcDaemon {
             }
         }
 
+        this.detachRpcClientEvents(this.rpcClient);
         if (this.rpcClient.destroy) {
             try {
                 await this.rpcClient.destroy();
@@ -253,9 +292,9 @@ export class RpcDaemon {
     }
 
     /**
-     * Processes an incoming Antigravity lifecycle hook event.
+     * Applies an incoming Antigravity lifecycle hook event to internal state and watchdog timers.
      */
-    public async handlePayload(payload: HookPayload): Promise<void> {
+    private async applyHookToState(payload: HookPayload): Promise<PresenceActivity | null> {
         // Clear idle countdown if active work has resumed
         if (payload.event === "PreInvocation" || payload.event === "PreToolUse") {
             this.clearIdleTimer();
@@ -271,6 +310,14 @@ export class RpcDaemon {
         }
 
         this.resetWatchdogTimer(currentStatus);
+        return activity;
+    }
+
+    /**
+     * Processes an incoming Antigravity lifecycle hook event.
+     */
+    public async handlePayload(payload: HookPayload): Promise<void> {
+        const activity = await this.applyHookToState(payload);
         this.schedulePresenceUpdate(activity);
     }
 

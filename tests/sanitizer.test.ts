@@ -83,6 +83,12 @@ describe("Sanitizer", () => {
         assert.equal(truncateRpcText("a", 128), undefined);
         assert.equal(truncateRpcText("  ", 128), undefined);
         assert.equal(truncateRpcText("ab", 128), "ab");
+        assert.equal(truncateRpcText("abc", 1), undefined);
+        assert.equal(truncateRpcText("abc", 0), undefined);
+        assert.equal(truncateRpcText("abc", -5), undefined);
+        assert.equal(truncateRpcText("abc", Number.NaN), undefined);
+        assert.equal(truncateRpcText("abcd", 2), "ab");
+
         const longEmoji = "🚀".repeat(140);
         const truncated = truncateRpcText(longEmoji, 128)!;
         assert.equal(Array.from(truncated).length, 128);

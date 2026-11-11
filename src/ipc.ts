@@ -225,6 +225,7 @@ export function probeSocketActive(
                         // ignore
                     }
                     client.removeAllListeners();
+                    client.on("error", () => {});
                     try {
                         client.destroy();
                     } catch {
