@@ -31374,6 +31374,66 @@ var DEFAULT_CONFIG = {
   idleTimeoutSeconds: 300,
   showRepoButton: true
 };
+function parseBoolean(raw, fallback) {
+  if (raw === void 0) {
+    return fallback;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "true" || trimmed === "1") {
+    return true;
+  }
+  if (trimmed === "false" || trimmed === "0") {
+    return false;
+  }
+  return fallback;
+}
+function loadConfigFromEnv(env = process.env) {
+  let clientId = DEFAULT_CONFIG.clientId;
+  if (env.AGY_DISCORD_CLIENT_ID) {
+    const trimmed = env.AGY_DISCORD_CLIENT_ID.trim();
+    if (trimmed.length > 0) {
+      clientId = trimmed;
+    }
+  }
+  let idleTimeoutSeconds = DEFAULT_CONFIG.idleTimeoutSeconds;
+  if (env.AGY_DISCORD_IDLE_TIMEOUT) {
+    const parsed = Number.parseInt(env.AGY_DISCORD_IDLE_TIMEOUT.trim(), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      idleTimeoutSeconds = parsed;
+    }
+  }
+  return {
+    clientId,
+    privacyMode: parseBoolean(env.AGY_DISCORD_PRIVACY_MODE, DEFAULT_CONFIG.privacyMode),
+    idleTimeoutSeconds,
+    showRepoButton: parseBoolean(env.AGY_DISCORD_SHOW_REPO_BUTTON, DEFAULT_CONFIG.showRepoButton)
+  };
+}
+function loadWatchdogTimeoutMsFromEnv(env = process.env) {
+  const raw = env.AGY_DISCORD_WATCHDOG_TIMEOUT?.trim();
+  if (raw) {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed * 1e3;
+    }
+  }
+  return 18e5;
+}
+function decodeInitialPayload(raw) {
+  if (!raw || typeof raw !== "string") {
+    return null;
+  }
+  try {
+    const decoded = Buffer.from(raw, "base64").toString("utf-8");
+    const parsed = JSON.parse(decoded);
+    if (parsed && typeof parsed === "object" && typeof parsed.event === "string") {
+      return parsed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // src/sanitizer.ts
 import path from "node:path";
@@ -31477,7 +31537,8 @@ function mapToolToAction(toolName, args, privacyMode = false) {
         return "Running command";
       }
       if (args?.toolSummary && typeof args.toolSummary === "string" && args.toolSummary.trim().length > 0) {
-        return `Running: ${args.toolSummary.trim()}`;
+        const summary = sanitizeCommand(args.toolSummary.trim(), false);
+        return `Running: ${summary}`;
       }
       if (args?.CommandLine && typeof args.CommandLine === "string" && args.CommandLine.trim().length > 0) {
         const cmd = sanitizeCommand(args.CommandLine, false);
@@ -31505,6 +31566,40 @@ function mapToolToAction(toolName, args, privacyMode = false) {
       return "Browsing plugin marketplace";
     default:
       return `Executing ${toolName}`;
+  }
+}
+function truncateRpcText(value, maxLength) {
+  if (!value || typeof value !== "string") {
+    return void 0;
+  }
+  const trimmed = value.trim();
+  const chars = Array.from(trimmed);
+  if (chars.length < 2) {
+    return void 0;
+  }
+  if (chars.length <= maxLength) {
+    return trimmed;
+  }
+  if (maxLength < 3) {
+    return chars.slice(0, maxLength).join("");
+  }
+  return chars.slice(0, maxLength - 3).join("") + "...";
+}
+function validateRpcButtonUrl(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== "string") {
+    return void 0;
+  }
+  if (rawUrl.length > 512) {
+    return void 0;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return void 0;
+    }
+    return rawUrl;
+  } catch {
+    return void 0;
   }
 }
 
@@ -31794,36 +31889,46 @@ var PresenceStateMachine = class {
     return latest;
   }
   /**
+   * Returns the currently active PresenceActivity payload, or null if stopped.
+   */
+  getCurrentActivity() {
+    return this.buildActivity(this.getCurrentStatus());
+  }
+  /**
    * Formats repository action buttons for Discord Rich Presence.
+   * Enforces valid HTTP/HTTPS URL, max 512 URL length, max 32 label length, max 2 buttons.
    */
   getButtons() {
     if (this.config.showRepoButton && !this.config.privacyMode && this.gitInfo?.remoteUrl) {
-      return [{ label: "View Repository", url: this.gitInfo.remoteUrl }];
+      const validUrl = validateRpcButtonUrl(this.gitInfo.remoteUrl);
+      const validLabel = truncateRpcText("View Repository", 32);
+      if (validUrl && validLabel) {
+        const buttons = [{ label: validLabel, url: validUrl }];
+        return buttons.slice(0, 2);
+      }
     }
     return void 0;
   }
   /**
    * Formats the Discord state string showing project and branch info.
+   * Truncates output to Discord's 128 character limit.
    */
   formatState(status) {
     const repoName = this.gitInfo?.repoName || (this.cwd ? path3.basename(this.cwd) : void 0);
     const branch = this.gitInfo?.branch;
+    let rawState;
     if (status === "IDLE" /* IDLE */) {
       if (repoName) {
-        return `Project: ${repoName}`;
+        rawState = `Project: ${repoName}`;
       }
-      return void 0;
+    } else if (repoName && branch) {
+      rawState = `Project: ${repoName} (${branch})`;
+    } else if (repoName) {
+      rawState = `Project: ${repoName}`;
+    } else if (branch) {
+      rawState = `Branch: ${branch}`;
     }
-    if (repoName && branch) {
-      return `Project: ${repoName} (${branch})`;
-    }
-    if (repoName) {
-      return `Project: ${repoName}`;
-    }
-    if (branch) {
-      return `Branch: ${branch}`;
-    }
-    return void 0;
+    return truncateRpcText(rawState, 128);
   }
   /**
    * Constructs the full PresenceActivity payload based on current status and active sessions.
@@ -31856,7 +31961,9 @@ var PresenceStateMachine = class {
         );
         const isExecutingSubagent = activeSession?.isSubagent ?? false;
         const subSuffix = !isExecutingSubagent && subCount > 0 || isExecutingSubagent && subCount > 1 ? ` (${subCount} subagent${subCount > 1 ? "s" : ""} active)` : "";
-        details = `${action}${subSuffix}`;
+        const maxActionLen = Math.max(2, 128 - subSuffix.length);
+        const truncatedAction = truncateRpcText(action, maxActionLen) || action;
+        details = truncateRpcText(`${truncatedAction}${subSuffix}`, 128);
         smallImageKey = "gear";
         smallImageText = "Executing tool";
         break;
@@ -31877,13 +31984,13 @@ var PresenceStateMachine = class {
         return null;
     }
     return {
-      details,
+      details: truncateRpcText(details, 128),
       state: this.formatState(status),
       startTimestamp: this.startTimestamp,
       largeImageKey: this.largeImageKey,
-      largeImageText: this.largeImageText,
+      largeImageText: truncateRpcText(this.largeImageText, 128),
       smallImageKey,
-      smallImageText,
+      smallImageText: truncateRpcText(smallImageText, 128),
       buttons: this.getButtons()
     };
   }
@@ -31919,6 +32026,12 @@ var IpcServer = class {
   async start() {
     if (this._isListening) return;
     if (process.platform !== "win32" && fs.existsSync(this.path)) {
+      const active = await probeSocketActive(this.path, 50);
+      if (active) {
+        const err = new Error(`EADDRINUSE: address already in use ${this.path}`);
+        err.code = "EADDRINUSE";
+        throw err;
+      }
       try {
         fs.unlinkSync(this.path);
       } catch {
@@ -31996,6 +32109,39 @@ var IpcServer = class {
     });
   }
 };
+function probeSocketActive(socketPath, timeoutMs = 50) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let client = null;
+    const finish = (result) => {
+      if (!settled) {
+        settled = true;
+        if (client) {
+          try {
+            client.setTimeout(0);
+          } catch {
+          }
+          client.removeAllListeners();
+          try {
+            client.destroy();
+          } catch {
+          }
+        }
+        resolve(result);
+      }
+    };
+    try {
+      client = net.createConnection(socketPath);
+      client.setTimeout(timeoutMs);
+      client.once("connect", () => finish(true));
+      client.once("timeout", () => finish(false));
+      client.once("error", () => finish(false));
+      client.once("close", () => finish(false));
+    } catch {
+      finish(false);
+    }
+  });
+}
 
 // src/daemon.ts
 var RpcDaemon = class {
@@ -32003,6 +32149,13 @@ var RpcDaemon = class {
   stateMachine;
   ipcServer;
   throttleMs;
+  reconnectBaseMs;
+  reconnectMaxMs;
+  watchdogMs;
+  activeWatchdogMs;
+  onWatchdogExit;
+  clientFactory;
+  hasCustomClient;
   rpcClient;
   _isConnected = false;
   isConnecting = false;
@@ -32011,40 +32164,57 @@ var RpcDaemon = class {
   throttleTimer = null;
   pendingActivity = void 0;
   idleTimer = null;
+  reconnectTimer = null;
+  reconnectAttempt = 0;
+  watchdogTimer = null;
+  lastSentSignature = void 0;
   constructor(config = DEFAULT_CONFIG, options = {}) {
     this.config = config;
     this.stateMachine = new PresenceStateMachine(this.config);
     this.ipcServer = new IpcServer(options.ipcPath);
     this.throttleMs = options.throttleMs ?? 2e3;
-    this.rpcClient = options.rpcClient ?? new import_discord_rpc.Client({ clientId: this.config.clientId });
+    this.reconnectBaseMs = options.reconnectBaseMs ?? 2e3;
+    this.reconnectMaxMs = options.reconnectMaxMs ?? 3e4;
+    this.watchdogMs = options.watchdogMs ?? 18e5;
+    this.activeWatchdogMs = options.activeWatchdogMs ?? 144e5;
+    this.onWatchdogExit = options.onWatchdogExit;
+    this.clientFactory = options.clientFactory;
+    this.hasCustomClient = Boolean(options.rpcClient);
+    this.rpcClient = options.rpcClient ?? this.createNewClient();
     this.setupRpcClientEvents();
   }
   get isConnected() {
     return this._isConnected;
   }
+  createNewClient() {
+    if (this.clientFactory) {
+      return this.clientFactory();
+    }
+    return new import_discord_rpc.Client({ clientId: this.config.clientId });
+  }
   setupRpcClientEvents() {
     if (!this.rpcClient) return;
+    const onConnect = () => {
+      this._isConnected = true;
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
+    };
+    const onDisconnect = () => {
+      this._isConnected = false;
+      this.lastSentSignature = void 0;
+      if (!this.isStopping) {
+        this.scheduleReconnect();
+      }
+    };
     if (typeof this.rpcClient.on === "function") {
-      this.rpcClient.on("ready", () => {
-        this._isConnected = true;
-      });
-      this.rpcClient.on("connected", () => {
-        this._isConnected = true;
-      });
-      this.rpcClient.on("disconnected", () => {
-        this._isConnected = false;
-      });
-      this.rpcClient.on("error", () => {
-        this._isConnected = false;
-      });
+      this.rpcClient.on("ready", onConnect);
+      this.rpcClient.on("connected", onConnect);
+      this.rpcClient.on("disconnected", onDisconnect);
+      this.rpcClient.on("error", onDisconnect);
     }
     if (this.rpcClient.transport && typeof this.rpcClient.transport.on === "function") {
-      this.rpcClient.transport.on("error", () => {
-        this._isConnected = false;
-      });
-      this.rpcClient.transport.on("close", () => {
-        this._isConnected = false;
-      });
+      this.rpcClient.transport.on("error", onDisconnect);
+      this.rpcClient.transport.on("close", onDisconnect);
     }
   }
   /**
@@ -32053,13 +32223,58 @@ var RpcDaemon = class {
   async connectDiscord() {
     if (this._isConnected || this.isConnecting || this.isStopping) return;
     this.isConnecting = true;
+    this.clearReconnectTimer();
     try {
+      if (!this.hasCustomClient && this.reconnectAttempt > 0) {
+        try {
+          if (this.rpcClient?.destroy) {
+            await this.rpcClient.destroy();
+          }
+        } catch {
+        }
+        this.rpcClient = this.createNewClient();
+        this.setupRpcClientEvents();
+      }
       await this.rpcClient.login();
       this._isConnected = true;
+      this.reconnectAttempt = 0;
+      this.clearReconnectTimer();
     } catch {
       this._isConnected = false;
+      this.scheduleReconnect();
     } finally {
       this.isConnecting = false;
+    }
+  }
+  scheduleReconnect() {
+    if (this.isStopping || this._isConnected || this.reconnectTimer) return;
+    const delay = Math.min(
+      this.reconnectMaxMs,
+      this.reconnectBaseMs * Math.pow(2, this.reconnectAttempt)
+    );
+    this.reconnectAttempt++;
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      if (this.isStopping || this._isConnected) return;
+      await this.connectDiscord();
+      if (this._isConnected) {
+        await this.reSyncPresence();
+      }
+    }, delay);
+    this.reconnectTimer.unref();
+  }
+  clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+  async reSyncPresence() {
+    if (this.isStopping || !this._isConnected) return;
+    const currentStatus = this.stateMachine.getCurrentStatus();
+    if (currentStatus !== "STOPPED" /* STOPPED */) {
+      const currentActivity = this.stateMachine.getCurrentActivity();
+      await this.sendPresenceToDiscord(currentActivity);
     }
   }
   /**
@@ -32071,13 +32286,26 @@ var RpcDaemon = class {
       await this.handlePayload(payload);
     };
     await this.ipcServer.start();
+    try {
+      await this.stateMachine.handleHook({ event: "Init", isSubagent: true, conversationId: "__init__" });
+    } catch {
+    }
+    const rawInitialPayload = process.env.AGY_INITIAL_PAYLOAD;
+    delete process.env.AGY_INITIAL_PAYLOAD;
+    this.resetWatchdogTimer(this.stateMachine.getCurrentStatus());
     await this.connectDiscord();
+    const initialPayload = decodeInitialPayload(rawInitialPayload);
+    if (initialPayload) {
+      await this.handlePayload(initialPayload);
+    }
   }
   /**
    * Gracefully stops the daemon, clears Discord Rich Presence, and shuts down IPC.
    */
   async stop() {
     this.isStopping = true;
+    this.clearWatchdogTimer();
+    this.clearReconnectTimer();
     this.clearIdleTimer();
     this.clearThrottleTimer();
     if (this._isConnected && this.rpcClient.user?.clearActivity) {
@@ -32093,6 +32321,7 @@ var RpcDaemon = class {
       }
     }
     this._isConnected = false;
+    this.lastSentSignature = void 0;
     await this.ipcServer.stop();
   }
   /**
@@ -32109,7 +32338,22 @@ var RpcDaemon = class {
     } else if (currentStatus === "STOPPED" /* STOPPED */) {
       this.clearIdleTimer();
     }
+    this.resetWatchdogTimer(currentStatus);
     this.schedulePresenceUpdate(activity);
+  }
+  computeSignature(activity) {
+    if (activity === null) {
+      return "CLEARED";
+    }
+    return JSON.stringify({
+      details: activity.details,
+      state: activity.state,
+      largeImageKey: activity.largeImageKey,
+      largeImageText: activity.largeImageText,
+      smallImageKey: activity.smallImageKey,
+      smallImageText: activity.smallImageText,
+      buttons: activity.buttons
+    });
   }
   /**
    * Schedules a throttled presence update to Discord to adhere to the 2-second rate limit.
@@ -32136,6 +32380,7 @@ var RpcDaemon = class {
           });
         }
       }, delay);
+      this.throttleTimer.unref();
     }
   }
   /**
@@ -32145,6 +32390,10 @@ var RpcDaemon = class {
     if (!this._isConnected) {
       await this.connectDiscord();
       if (!this._isConnected) return;
+    }
+    const signature = this.computeSignature(activity);
+    if (this._isConnected && signature === this.lastSentSignature) {
+      return;
     }
     try {
       if (activity === null) {
@@ -32166,8 +32415,36 @@ var RpcDaemon = class {
         }
         await this.rpcClient.user.setActivity(presencePayload);
       }
+      this.lastUpdateTime = Date.now();
+      this.lastSentSignature = signature;
     } catch {
       this._isConnected = false;
+      this.lastSentSignature = void 0;
+      this.scheduleReconnect();
+    }
+  }
+  resetWatchdogTimer(status) {
+    this.clearWatchdogTimer();
+    if (this.isStopping) return;
+    const timeoutMs = status === "IDLE" /* IDLE */ || status === "STOPPED" /* STOPPED */ ? this.watchdogMs : this.activeWatchdogMs;
+    this.watchdogTimer = setTimeout(async () => {
+      this.watchdogTimer = null;
+      if (this.isStopping) return;
+      try {
+        await this.stop();
+      } catch {
+      }
+      try {
+        this.onWatchdogExit?.();
+      } catch {
+      }
+    }, timeoutMs);
+    this.watchdogTimer.unref();
+  }
+  clearWatchdogTimer() {
+    if (this.watchdogTimer) {
+      clearTimeout(this.watchdogTimer);
+      this.watchdogTimer = null;
     }
   }
   resetIdleTimer() {
@@ -32179,9 +32456,11 @@ var RpcDaemon = class {
         if (idleActivity) {
           this.schedulePresenceUpdate(idleActivity);
         }
+        this.resetWatchdogTimer(this.stateMachine.getCurrentStatus());
       } catch {
       }
     }, ms);
+    this.idleTimer.unref();
   }
   clearIdleTimer() {
     if (this.idleTimer) {
@@ -32201,7 +32480,10 @@ var isDirectRun = Boolean(
   process.argv[1] && (process.argv[1].endsWith("daemon.js") || process.argv[1].endsWith("daemon.ts")) && !process.argv[1].includes("test")
 );
 if (isDirectRun) {
-  const daemon = new RpcDaemon();
+  const daemon = new RpcDaemon(loadConfigFromEnv(), {
+    watchdogMs: loadWatchdogTimeoutMsFromEnv(),
+    onWatchdogExit: () => process.exit(0)
+  });
   daemon.start().catch((err) => {
     console.error("Failed to start RPC daemon:", err);
     process.exit(1);
