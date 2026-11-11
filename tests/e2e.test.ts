@@ -23,6 +23,9 @@ describe("E2E Integration & Build Verification", () => {
         const hooks = JSON.parse(fs.readFileSync("hooks.json", "utf-8"));
         assert.equal(plugin.name, "antigravity-discord-presence");
         assert.ok(hooks["discord-presence"] !== undefined, "hooks.json must contain discord-presence group");
+        const groupKeys = Object.keys(hooks);
+        assert.equal(groupKeys.length, 1, "hooks.json must not register duplicate hook groups");
+        assert.equal(groupKeys[0], "discord-presence");
     });
 
     it("verifies bin/dispatch.js responds correctly as a hook command", () => {
