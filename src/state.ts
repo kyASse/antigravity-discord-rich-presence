@@ -6,7 +6,7 @@ import {
     type PresenceActivity,
     type PluginConfig
 } from "./types.js";
-import { mapToolToAction } from "./sanitizer.js";
+import { mapToolToAction, truncateRpcText, validateRpcButtonUrl } from "./sanitizer.js";
 import { getGitInfo, type GitInfo } from "./git.js";
 
 interface SessionState {
@@ -260,39 +260,51 @@ export class PresenceStateMachine {
     }
 
     /**
+     * Returns the currently active PresenceActivity payload, or null if stopped.
+     */
+    public getCurrentActivity(): PresenceActivity | null {
+        return this.buildActivity(this.getCurrentStatus());
+    }
+
+    /**
      * Formats repository action buttons for Discord Rich Presence.
+     * Enforces valid HTTP/HTTPS URL, max 512 URL length, max 32 label length, max 2 buttons.
      */
     private getButtons(): Array<{ label: string; url: string }> | undefined {
         if (this.config.showRepoButton && !this.config.privacyMode && this.gitInfo?.remoteUrl) {
-            return [{ label: "View Repository", url: this.gitInfo.remoteUrl }];
+            const validUrl = validateRpcButtonUrl(this.gitInfo.remoteUrl);
+            const validLabel = truncateRpcText("View Repository", 32);
+            if (validUrl && validLabel) {
+                const buttons = [{ label: validLabel, url: validUrl }];
+                return buttons.slice(0, 2);
+            }
         }
         return undefined;
     }
 
     /**
      * Formats the Discord state string showing project and branch info.
+     * Truncates output to Discord's 128 character limit.
      */
     private formatState(status: PresenceStatus): string | undefined {
         const repoName = this.gitInfo?.repoName || (this.cwd ? path.basename(this.cwd) : undefined);
         const branch = this.gitInfo?.branch;
 
+        let rawState: string | undefined;
+
         if (status === PresenceStatus.IDLE) {
             if (repoName) {
-                return `Project: ${repoName}`;
+                rawState = `Project: ${repoName}`;
             }
-            return undefined;
+        } else if (repoName && branch) {
+            rawState = `Project: ${repoName} (${branch})`;
+        } else if (repoName) {
+            rawState = `Project: ${repoName}`;
+        } else if (branch) {
+            rawState = `Branch: ${branch}`;
         }
 
-        if (repoName && branch) {
-            return `Project: ${repoName} (${branch})`;
-        }
-        if (repoName) {
-            return `Project: ${repoName}`;
-        }
-        if (branch) {
-            return `Branch: ${branch}`;
-        }
-        return undefined;
+        return truncateRpcText(rawState, 128);
     }
 
     /**
@@ -307,7 +319,7 @@ export class PresenceStateMachine {
             this.startTimestamp = Date.now();
         }
 
-        let details: string;
+        let details: string | undefined;
         let smallImageKey: string;
         let smallImageText: string;
 
@@ -334,7 +346,9 @@ export class PresenceStateMachine {
                     (!isExecutingSubagent && subCount > 0) || (isExecutingSubagent && subCount > 1)
                         ? ` (${subCount} subagent${subCount > 1 ? "s" : ""} active)`
                         : "";
-                details = `${action}${subSuffix}`;
+                const maxActionLen = Math.max(2, 128 - subSuffix.length);
+                const truncatedAction = truncateRpcText(action, maxActionLen) || action;
+                details = truncateRpcText(`${truncatedAction}${subSuffix}`, 128);
                 smallImageKey = "gear";
                 smallImageText = "Executing tool";
                 break;
@@ -359,13 +373,13 @@ export class PresenceStateMachine {
         }
 
         return {
-            details,
+            details: truncateRpcText(details, 128),
             state: this.formatState(status),
             startTimestamp: this.startTimestamp,
             largeImageKey: this.largeImageKey,
-            largeImageText: this.largeImageText,
+            largeImageText: truncateRpcText(this.largeImageText, 128),
             smallImageKey,
-            smallImageText,
+            smallImageText: truncateRpcText(smallImageText, 128),
             buttons: this.getButtons()
         };
     }

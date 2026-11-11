@@ -1,17 +1,21 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { IpcServer } from "../src/ipc.js";
 import { runDispatch, parseCliArgs, parseStdin } from "../src/dispatch.js";
-import { HookPayload } from "../src/types.js";
+import { HookPayload, decodeInitialPayload } from "../src/types.js";
 
 describe("CLI Dispatcher", () => {
     let server: IpcServer;
     let receivedPayload: HookPayload | null = null;
+    const testPipe = process.platform === "win32"
+        ? `\\\\.\\pipe\\agy-discord-rpc-test-${process.pid}-${Date.now()}`
+        : `/tmp/agy-discord-rpc-test-${process.pid}-${Date.now()}.sock`;
 
     before(async () => {
-        server = new IpcServer();
+        server = new IpcServer(testPipe);
         server.onMessage = (p) => {
             receivedPayload = p;
         };
@@ -24,7 +28,7 @@ describe("CLI Dispatcher", () => {
 
     it("parses CLI args and dispatches event to IPC server within 50ms", async () => {
         const start = performance.now();
-        await runDispatch(["--event", "PreInvocation", "--conversationId", "c-456"], process.env);
+        await runDispatch(["--event", "PreInvocation", "--conversationId", "c-456"], { ...process.env, AGY_IPC_PATH: testPipe });
         const duration = performance.now() - start;
 
         assert.ok(duration < 100, `Dispatch took too long: ${duration}ms`);
@@ -41,7 +45,7 @@ describe("CLI Dispatcher", () => {
             "--toolArgs", '{"CommandLine":"npm test"}',
             "--isSubagent", "true",
             "--cwd", "C:/test/workspace"
-        ], process.env);
+        ], { ...process.env, AGY_IPC_PATH: testPipe });
 
         const payload: HookPayload | null = receivedPayload;
         assert.equal(payload?.event, "PreToolUse");
@@ -64,7 +68,7 @@ describe("CLI Dispatcher", () => {
             workspacePaths: ["C:/test/stdin-project"]
         });
 
-        await runDispatch([], process.env, stdinJson);
+        await runDispatch([], { ...process.env, AGY_IPC_PATH: testPipe }, stdinJson);
 
         const payload: HookPayload | null = receivedPayload;
         assert.equal(payload?.event, "PreToolUse");
@@ -82,7 +86,7 @@ describe("CLI Dispatcher", () => {
             workspacePaths: ["/original/path"]
         });
 
-        await runDispatch(["--event", "Stop", "--conversationId", "override-id", "--terminationReason", "NO_TOOL_CALL"], process.env, stdinJson);
+        await runDispatch(["--event", "Stop", "--conversationId", "override-id", "--terminationReason", "NO_TOOL_CALL"], { ...process.env, AGY_IPC_PATH: testPipe }, stdinJson);
 
         const payload: HookPayload | null = receivedPayload;
         assert.equal(payload?.event, "Stop");
@@ -110,11 +114,42 @@ describe("CLI Dispatcher", () => {
     });
 
     it("returns expected hook decision objects", async () => {
-        const preToolResult = await runDispatch(["--event", "PreToolUse", "--conversationId", "c-1"], process.env);
+        const preToolResult = await runDispatch(["--event", "PreToolUse", "--conversationId", "c-1"], { ...process.env, AGY_IPC_PATH: testPipe });
         assert.deepEqual(preToolResult, { decision: "allow" });
 
-        const preInvocResult = await runDispatch(["--event", "PreInvocation", "--conversationId", "c-1"], process.env);
+        const preInvocResult = await runDispatch(["--event", "PreInvocation", "--conversationId", "c-1"], { ...process.env, AGY_IPC_PATH: testPipe });
         assert.deepEqual(preInvocResult, {});
+    });
+
+    it("passes AGY_INITIAL_PAYLOAD in spawned daemon env on cold start without mutating parent env", async () => {
+        const tmpOut = path.join(os.tmpdir(), `agy-coldstart-${process.pid}-${Date.now()}.json`);
+        const fakeDaemon = path.join(os.tmpdir(), `agy-fake-daemon-${process.pid}-${Date.now()}.mjs`);
+        fs.writeFileSync(
+            fakeDaemon,
+            `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(tmpOut)}, process.env.AGY_INITIAL_PAYLOAD ?? "");`,
+            "utf-8"
+        );
+        try {
+            await runDispatch(
+                ["--event", "SessionStart", "--conversationId", "cold-1"],
+                {
+                    ...process.env,
+                    AGY_IPC_PATH: process.platform === "win32"
+                        ? `\\\\.\\pipe\\agy-coldstart-missing-${process.pid}`
+                        : `/tmp/agy-coldstart-missing-${process.pid}.sock`,
+                    AGY_DAEMON_PATH: fakeDaemon,
+                    AGY_AUTO_SPAWN: "true"
+                }
+            );
+            // Wait briefly for child process to write file
+            await new Promise((r) => setTimeout(r, 250));
+            const written = fs.readFileSync(tmpOut, "utf-8");
+            assert.equal(decodeInitialPayload(written)?.conversationId, "cold-1");
+            assert.equal(process.env.AGY_INITIAL_PAYLOAD, undefined);
+        } finally {
+            fs.rmSync(tmpOut, { force: true });
+            fs.rmSync(fakeDaemon, { force: true });
+        }
     });
 });
 

@@ -152,7 +152,8 @@ export function mapToolToAction(
             }
 
             if (args?.toolSummary && typeof args.toolSummary === "string" && args.toolSummary.trim().length > 0) {
-                return `Running: ${args.toolSummary.trim()}`;
+                const summary = sanitizeCommand(args.toolSummary.trim(), false);
+                return `Running: ${summary}`;
             }
 
             if (args?.CommandLine && typeof args.CommandLine === "string" && args.CommandLine.trim().length > 0) {
@@ -194,3 +195,59 @@ export function mapToolToAction(
             return `Executing ${toolName}`;
     }
 }
+
+/**
+ * Truncates text fields to Discord Rich Presence character limits cleanly by Unicode codepoints.
+ * Enforces a minimum length of 2 characters (returns undefined if trimmed length < 2).
+ * Appends '...' when truncating strings that exceed maxLength.
+ */
+export function truncateRpcText(value: string | undefined, maxLength: number): string | undefined {
+    if (!value || typeof value !== "string") {
+        return undefined;
+    }
+
+    if (typeof maxLength !== "number" || Number.isNaN(maxLength) || maxLength < 2) {
+        return undefined;
+    }
+
+    const trimmed = value.trim();
+    const chars = Array.from(trimmed);
+
+    if (chars.length < 2) {
+        return undefined;
+    }
+
+    if (chars.length <= maxLength) {
+        return trimmed;
+    }
+
+    if (maxLength < 3) {
+        return chars.slice(0, maxLength).join("");
+    }
+
+    return chars.slice(0, maxLength - 3).join("") + "...";
+}
+
+/**
+ * Validates a Discord RPC button URL: must be valid http: or https: scheme and <= 512 characters.
+ */
+export function validateRpcButtonUrl(rawUrl: string): string | undefined {
+    if (!rawUrl || typeof rawUrl !== "string") {
+        return undefined;
+    }
+
+    if (rawUrl.length > 512) {
+        return undefined;
+    }
+
+    try {
+        const parsed = new URL(rawUrl);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return undefined;
+        }
+        return rawUrl;
+    } catch {
+        return undefined;
+    }
+}
+

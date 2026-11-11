@@ -91,25 +91,13 @@ The plugin works out of the box with zero configuration. You can customize behav
 | `AGY_DISCORD_CLIENT_ID` | `string` | `1441771215290372156` | Custom Discord Application Client ID |
 | `AGY_DISCORD_PRIVACY_MODE` | `boolean` | `false` | When `true`, hides repository buttons and obscures command details |
 | `AGY_DISCORD_IDLE_TIMEOUT` | `number` | `300` | Inactivity idle timeout in seconds (default: 5 minutes) |
+| `AGY_DISCORD_WATCHDOG_TIMEOUT` | `number` | `1800` | Watchdog heartbeat timeout in seconds (default: 30 minutes) |
 | `AGY_DISCORD_SHOW_REPO_BUTTON` | `boolean` | `true` | Show clickable "View Repository" action button |
-
----
-
-## Development & Contributing
-
-If you wish to modify the source code or contribute:
-
-```bash
-git clone https://github.com/kyASse/antigravity-discord-rich-presence.git
-cd antigravity-discord-rich-presence
-npm install
-npm test       # Run full automated test suite (37 tests)
-npm run build  # Rebuild standalone binaries in bin/
-```
-| `AGY_DISCORD_IDLE_TIMEOUT` | `number` | `300` | Inactivity idle timeout in seconds (default: 5 minutes) |
-| `AGY_DISCORD_SHOW_REPO_BUTTON` | `boolean` | `true` | Whether to display "View Repository" button |
 | `AGY_AUTO_SPAWN` | `boolean` | `true` | Set to `false` to disable auto-spawning the daemon |
 | `AGY_IPC_PATH` | `string` | Auto-detected | Custom IPC pipe or socket path |
+
+> [!NOTE]
+> **Action Buttons on Your Own Profile:** Discord Desktop intentionally disables clicking Rich Presence action buttons (such as "View Repository") when viewing your own profile preview. Other Discord users viewing your profile can click these buttons normally.
 
 ---
 
@@ -119,6 +107,15 @@ npm run build  # Rebuild standalone binaries in bin/
 - Node.js >= 20.0.0
 - npm
 
+### Setup
+If you wish to modify the source code or contribute:
+
+```bash
+git clone https://github.com/kyASse/antigravity-discord-rich-presence.git
+cd antigravity-discord-rich-presence
+npm install
+```
+
 ### Build
 Bundle the standalone executables in `bin/` using `esbuild`:
 
@@ -127,7 +124,7 @@ npm run build
 ```
 
 ### Run Tests
-Run the comprehensive test suite (including unit, IPC, state machine, sanitizer, and end-to-end tests):
+Run the automated test suite (including unit, IPC, state machine, sanitizer, and end-to-end tests):
 
 ```bash
 npm test

@@ -46,53 +46,5 @@
         "command": "node bin/dispatch.js --event Stop"
       }
     ]
-  },
-  "antigravity-discord-presence": {
-    "SessionStart": [
-      {
-        "type": "command",
-        "command": "node bin/dispatch.js --event SessionStart"
-      }
-    ],
-    "PreInvocation": [
-      {
-        "type": "command",
-        "command": "node bin/dispatch.js --event PreInvocation"
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node bin/dispatch.js --event PreToolUse"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node bin/dispatch.js --event PostToolUse"
-          }
-        ]
-      }
-    ],
-    "PostInvocation": [
-      {
-        "type": "command",
-        "command": "node bin/dispatch.js --event PostInvocation"
-      }
-    ],
-    "Stop": [
-      {
-        "type": "command",
-        "command": "node bin/dispatch.js --event Stop"
-      }
-    ]
   }
 }

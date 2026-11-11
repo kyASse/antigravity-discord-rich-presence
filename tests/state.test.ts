@@ -157,4 +157,36 @@ describe("Presence State Machine", () => {
         assert.equal((sm as any).sessions.has("sub1"), false);
         assert.equal((sm as any).sessions.has("root"), true);
     });
+
+    it("caps details, state, and button labels to Discord RPC limits while keeping subagent suffix", async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "long-git-test-"));
+        try {
+            execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+            const longBranch = "feat/" + "very-long-branch-segment-".repeat(6);
+            execFileSync("git", ["checkout", "-b", longBranch], { cwd: tmpDir, stdio: "ignore" });
+            execFileSync(
+                "git",
+                ["config", "remote.origin.url", "https://github.com/test-owner/" + "r".repeat(500) + ".git"],
+                { cwd: tmpDir, stdio: "ignore" }
+            );
+
+            const sm = new PresenceStateMachine({ ...DEFAULT_CONFIG, showRepoButton: true });
+            await sm.handleHook({ event: "PreInvocation", conversationId: "sub1", isSubagent: true });
+            const activity = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "root",
+                cwd: tmpDir,
+                toolName: "run_command",
+                toolArgs: { CommandLine: "echo " + "x".repeat(200) }
+            });
+
+            assert.ok((activity?.details?.length ?? 0) <= 128);
+            assert.ok(activity?.details?.includes("(1 subagent active)"));
+            assert.ok((activity?.state?.length ?? 0) <= 128);
+            assert.equal(activity?.buttons, undefined); // > 512 chars URL omitted
+            assert.deepEqual(sm.getCurrentActivity(), activity);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });

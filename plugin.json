@@ -1,7 +1,7 @@
 {
   "name": "antigravity-discord-presence",
   "displayName": "Antigravity Discord Rich Presence",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Real-time Discord Rich Presence for Antigravity App showing agent status, project, and activity.",
   "author": "Antigravity Engineering",
   "repository": "https://github.com/sanbercode/antigravity-discord-rich-presence"

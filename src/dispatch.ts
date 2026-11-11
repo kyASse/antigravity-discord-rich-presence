@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sendIpcMessage, getIpcAddress } from "./ipc.js";
-import type { HookPayload } from "./types.js";
+import { type HookPayload, encodeInitialPayload } from "./types.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -153,13 +153,21 @@ export function resolveDaemonScript(env: NodeJS.ProcessEnv = process.env): { exe
 /**
  * Spawns the background RPC daemon detached so it runs independently.
  */
-export function spawnDaemon(env: NodeJS.ProcessEnv = process.env): child_process.ChildProcess | null {
+export function spawnDaemon(
+    env: NodeJS.ProcessEnv = process.env,
+    initialPayload?: HookPayload
+): child_process.ChildProcess | null {
     try {
         const { execPath, args } = resolveDaemonScript(env);
+        const childEnv = {
+            ...process.env,
+            ...env,
+            ...(initialPayload ? { AGY_INITIAL_PAYLOAD: encodeInitialPayload(initialPayload) } : {})
+        };
         const child = child_process.spawn(execPath, args, {
             detached: true,
             stdio: "ignore",
-            env: { ...process.env, ...env }
+            env: childEnv
         });
         child.unref();
         return child;
@@ -245,7 +253,7 @@ export async function runDispatch(
     if (!delivered) {
         const autoSpawnAllowed = env.AGY_AUTO_SPAWN !== "false" && process.env.AGY_AUTO_SPAWN !== "false";
         if (autoSpawnAllowed) {
-            spawnDaemon(env);
+            spawnDaemon(env, payload);
         }
     }
 

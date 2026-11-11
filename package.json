@@ -1,6 +1,6 @@
 {
   "name": "antigravity-discord-presence",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Discord Rich Presence plugin for Antigravity App",
   "type": "module",
   "main": "bin/dispatch.js",

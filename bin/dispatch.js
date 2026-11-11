@@ -59,6 +59,11 @@ function sendIpcMessage(payload, timeoutMs = 1e3, socketPath) {
   });
 }
 
+// src/types.ts
+function encodeInitialPayload(payload) {
+  return Buffer.from(JSON.stringify(payload), "utf-8").toString("base64");
+}
+
 // src/dispatch.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
@@ -166,13 +171,18 @@ function resolveDaemonScript(env = process.env) {
   }
   return { execPath: process.execPath, args: [binDaemon] };
 }
-function spawnDaemon(env = process.env) {
+function spawnDaemon(env = process.env, initialPayload) {
   try {
     const { execPath, args } = resolveDaemonScript(env);
+    const childEnv = {
+      ...process.env,
+      ...env,
+      ...initialPayload ? { AGY_INITIAL_PAYLOAD: encodeInitialPayload(initialPayload) } : {}
+    };
     const child = child_process.spawn(execPath, args, {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env, ...env }
+      env: childEnv
     });
     child.unref();
     return child;
@@ -229,7 +239,7 @@ async function runDispatch(argv, env = process.env, stdinInput) {
   if (!delivered) {
     const autoSpawnAllowed = env.AGY_AUTO_SPAWN !== "false" && process.env.AGY_AUTO_SPAWN !== "false";
     if (autoSpawnAllowed) {
-      spawnDaemon(env);
+      spawnDaemon(env, payload);
     }
   }
   if (event === "PreToolUse") {
