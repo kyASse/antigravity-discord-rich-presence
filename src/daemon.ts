@@ -3,6 +3,7 @@ import { PresenceStateMachine } from "./state.js";
 import { IpcServer } from "./ipc.js";
 import {
     DEFAULT_CONFIG,
+    loadConfigFromEnv,
     PresenceStatus,
     type HookPayload,
     type PresenceActivity,
@@ -263,7 +264,7 @@ const isDirectRun = Boolean(
 );
 
 if (isDirectRun) {
-    const daemon = new RpcDaemon();
+    const daemon = new RpcDaemon(loadConfigFromEnv());
     daemon.start().catch((err) => {
         console.error("Failed to start RPC daemon:", err);
         process.exit(1);
