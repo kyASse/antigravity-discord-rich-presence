@@ -31456,7 +31456,7 @@ function parseOptionalPositiveInt(raw) {
 }
 function loadConfigFile(filePath) {
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
+    const raw = fs.readFileSync(filePath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return {};

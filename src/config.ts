@@ -86,7 +86,7 @@ function parseOptionalPositiveInt(raw: string | undefined): number | undefined {
  */
 export function loadConfigFile(filePath: string): ConfigOverrides {
     try {
-        const raw = fs.readFileSync(filePath, "utf-8");
+        const raw = fs.readFileSync(filePath, "utf-8").replace(/^\uFEFF/, "");
         const parsed: unknown = JSON.parse(raw);
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
             return {};

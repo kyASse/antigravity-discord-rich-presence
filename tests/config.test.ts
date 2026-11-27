@@ -43,6 +43,10 @@ describe("Persistent Config Loader", () => {
             const nullPath = path.join(tmpDir, "null.json");
             fs.writeFileSync(nullPath, "null", "utf-8");
             assert.deepEqual(loadConfigFile(nullPath), {});
+
+            const bomPath = path.join(tmpDir, "bom.json");
+            fs.writeFileSync(bomPath, "\uFEFF" + JSON.stringify({ privacyProfile: "stealth" }), "utf-8");
+            assert.deepEqual(loadConfigFile(bomPath), { privacyProfile: "stealth", privacyMode: true });
         } finally {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
