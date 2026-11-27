@@ -25,6 +25,7 @@ export interface PresenceActivity {
     smallImageKey?: string;
     smallImageText?: string;
     buttons?: Array<{ label: string; url: string }>;
+    party?: { id: string; size: [number, number] };
 }
 
 export interface PluginConfig {
@@ -84,19 +85,33 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): PluginC
     };
 }
 
+export const DEFAULT_SUBAGENT_TTL_MS = 600_000;
+
+function parsePositiveSecondsMs(raw: string | undefined, fallbackMs: number): number {
+    const trimmed = raw?.trim();
+    if (trimmed) {
+        const parsed = Number.parseInt(trimmed, 10);
+        if (Number.isFinite(parsed) && parsed > 0) {
+            return parsed * 1000;
+        }
+    }
+    return fallbackMs;
+}
+
 /**
  * Loads watchdog timeout in milliseconds from AGY_DISCORD_WATCHDOG_TIMEOUT (specified in seconds).
  * Defaults to 1,800,000 ms (30 minutes).
  */
 export function loadWatchdogTimeoutMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
-    const raw = env.AGY_DISCORD_WATCHDOG_TIMEOUT?.trim();
-    if (raw) {
-        const parsed = Number.parseInt(raw, 10);
-        if (Number.isFinite(parsed) && parsed > 0) {
-            return parsed * 1000;
-        }
-    }
-    return 1_800_000;
+    return parsePositiveSecondsMs(env.AGY_DISCORD_WATCHDOG_TIMEOUT, 1_800_000);
+}
+
+/**
+ * Loads subagent TTL in milliseconds from AGY_DISCORD_SUBAGENT_TTL (specified in seconds).
+ * Defaults to DEFAULT_SUBAGENT_TTL_MS (600,000 ms / 10 minutes).
+ */
+export function loadSubagentTtlMsFromEnv(env: NodeJS.ProcessEnv = process.env): number {
+    return parsePositiveSecondsMs(env.AGY_DISCORD_SUBAGENT_TTL, DEFAULT_SUBAGENT_TTL_MS);
 }
 
 /**
