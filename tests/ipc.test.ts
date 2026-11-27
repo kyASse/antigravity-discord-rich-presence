@@ -257,6 +257,7 @@ describe("RPC Daemon Core", () => {
             {
                 clientId: "1441771215290372156",
                 privacyMode: false,
+                privacyProfile: "balanced",
                 idleTimeoutSeconds: 0.05, // 50ms idle timeout for testing
                 showRepoButton: true
             },

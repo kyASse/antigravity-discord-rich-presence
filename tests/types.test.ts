@@ -8,6 +8,8 @@ import {
     loadConfigFromEnv,
     loadWatchdogTimeoutMsFromEnv,
     loadSubagentTtlMsFromEnv,
+    parsePrivacyProfile,
+    resolveEffectivePrivacyProfile,
     encodeInitialPayload,
     decodeInitialPayload,
     type PresenceActivity
@@ -23,6 +25,7 @@ describe("Types & Defaults", () => {
         assert.equal(DEFAULT_CONFIG.clientId, "1441771215290372156");
         assert.equal(DEFAULT_CONFIG.idleTimeoutSeconds, 300);
         assert.equal(DEFAULT_CONFIG.privacyMode, false);
+        assert.equal(DEFAULT_CONFIG.privacyProfile, "balanced");
     });
 
     it("loads PluginConfig and watchdog timeout from env vars with safe fallbacks", () => {
@@ -37,6 +40,7 @@ describe("Types & Defaults", () => {
         assert.deepEqual(custom, {
             clientId: "999888777",
             privacyMode: true,
+            privacyProfile: "stealth",
             idleTimeoutSeconds: 120,
             showRepoButton: false
         });
@@ -49,6 +53,7 @@ describe("Types & Defaults", () => {
         });
         assert.equal(invalid.clientId, DEFAULT_CONFIG.clientId);
         assert.equal(invalid.privacyMode, false);
+        assert.equal(invalid.privacyProfile, "balanced");
         assert.equal(invalid.idleTimeoutSeconds, 300);
         assert.equal(invalid.showRepoButton, false);
 
@@ -63,6 +68,39 @@ describe("Types & Defaults", () => {
         assert.ok(defaultFromProcessEnv.clientId);
         assert.equal(typeof defaultFromProcessEnv.idleTimeoutSeconds, "number");
         assert.equal(typeof loadWatchdogTimeoutMsFromEnv(), "number");
+    });
+
+    it("parses privacyProfile, resolves legacy privacyMode=true to stealth, and prioritizes AGY_DISCORD_PRIVACY_PROFILE", () => {
+        assert.equal(parsePrivacyProfile(" STEALTH "), "stealth");
+        assert.equal(parsePrivacyProfile("Balanced"), "balanced");
+        assert.equal(parsePrivacyProfile("showcase"), "showcase");
+        assert.equal(parsePrivacyProfile("unknown"), undefined);
+        assert.equal(parsePrivacyProfile(undefined), undefined);
+
+        assert.equal(resolveEffectivePrivacyProfile({ privacyMode: true, privacyProfile: "balanced" }), "stealth");
+        assert.equal(resolveEffectivePrivacyProfile({ privacyMode: false, privacyProfile: "showcase" }), "showcase");
+
+        const fromProfile = loadConfigFromEnv({ AGY_DISCORD_PRIVACY_PROFILE: "showcase" });
+        assert.equal(fromProfile.privacyProfile, "showcase");
+        assert.equal(fromProfile.privacyMode, false);
+
+        const profileOverridesLegacy = loadConfigFromEnv({
+            AGY_DISCORD_PRIVACY_PROFILE: "showcase",
+            AGY_DISCORD_PRIVACY_MODE: "true"
+        });
+        assert.equal(profileOverridesLegacy.privacyProfile, "showcase");
+        assert.equal(profileOverridesLegacy.privacyMode, false);
+
+        const stealthFromProfile = loadConfigFromEnv({ AGY_DISCORD_PRIVACY_PROFILE: "stealth" });
+        assert.equal(stealthFromProfile.privacyProfile, "stealth");
+        assert.equal(stealthFromProfile.privacyMode, true);
+
+        const invalidProfileFallsBack = loadConfigFromEnv({
+            AGY_DISCORD_PRIVACY_PROFILE: "invalid",
+            AGY_DISCORD_PRIVACY_MODE: "true"
+        });
+        assert.equal(invalidProfileFallsBack.privacyProfile, "stealth");
+        assert.equal(invalidProfileFallsBack.privacyMode, true);
     });
 
     it("encodes and decodes AGY_INITIAL_PAYLOAD defensively", () => {
