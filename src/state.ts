@@ -120,10 +120,55 @@ export class PresenceStateMachine {
     }
 
     /**
+     * Prunes orphaned subagent sessions whose last activity exceeded subagentTtlMs.
+     * Resets workspace timer/peak metrics if pruning leaves a workspace STOPPED.
+     */
+    public pruneStaleSubagents(now: number = this.now()): number {
+        let prunedCount = 0;
+        const affectedWorkspaces = new Set<string>();
+
+        for (const [id, session] of this.sessions.entries()) {
+            if (session.isSubagent && now - session.updatedAt >= this.subagentTtlMs) {
+                this.sessions.delete(id);
+                affectedWorkspaces.add(session.workspaceKey);
+                prunedCount++;
+            }
+        }
+
+        for (const workspaceKey of affectedWorkspaces) {
+            const ws = this.workspaces.get(workspaceKey);
+            if (ws && this.getWorkspaceStatus(workspaceKey) === PresenceStatus.STOPPED) {
+                ws.startTimestamp = undefined;
+                ws.peakActiveAgents = 0;
+            }
+        }
+
+        return prunedCount;
+    }
+
+    /**
+     * Returns milliseconds until the next active subagent expires, or null if none exist.
+     */
+    public getNextSubagentExpiryMs(now: number = this.now()): number | null {
+        let minRemaining: number | null = null;
+
+        for (const session of this.sessions.values()) {
+            if (!session.isSubagent) continue;
+            const remaining = Math.max(1, this.subagentTtlMs - (now - session.updatedAt));
+            if (minRemaining === null || remaining < minRemaining) {
+                minRemaining = remaining;
+            }
+        }
+
+        return minRemaining;
+    }
+
+    /**
      * Determines the overall presence status across all tracked workspaces based on precedence:
      * EXECUTING_TOOL > THINKING > WAITING_REVIEW > IDLE > STOPPED
      */
     public getCurrentStatus(): PresenceStatus {
+        this.pruneStaleSubagents(this.now());
         return this.getWinningWorkspace()?.status ?? PresenceStatus.STOPPED;
     }
 
@@ -132,6 +177,7 @@ export class PresenceStateMachine {
      * When workspaceKey is provided, scopes to that workspace (plus unassigned default subagents).
      */
     public getActiveSubagentsCount(workspaceKey?: string): number {
+        this.pruneStaleSubagents(this.now());
         let count = 0;
         for (const session of this.sessions.values()) {
             if (
@@ -159,6 +205,7 @@ export class PresenceStateMachine {
     public async handleHook(payload: HookPayload): Promise<PresenceActivity | null> {
         const convId = payload.conversationId || "default";
         const now = this.now();
+        this.pruneStaleSubagents(now);
 
         let session = this.sessions.get(convId);
         const trimmedCwd = payload.cwd?.trim();
@@ -329,6 +376,8 @@ export class PresenceStateMachine {
      * Handles 5-minute inactivity timeout, transitioning WAITING_REVIEW sessions to IDLE.
      */
     public handleIdleTimeout(): PresenceActivity | null {
+        const now = this.now();
+        this.pruneStaleSubagents(now);
         const current = this.getCurrentStatus();
         if (current === PresenceStatus.WAITING_REVIEW) {
             for (const session of this.sessions.values()) {
@@ -373,6 +422,7 @@ export class PresenceStateMachine {
      * Returns the currently active PresenceActivity payload, or null if stopped.
      */
     public getCurrentActivity(): PresenceActivity | null {
+        this.pruneStaleSubagents(this.now());
         return this.buildActivity();
     }
 

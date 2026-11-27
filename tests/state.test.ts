@@ -277,4 +277,56 @@ describe("Presence State Machine", () => {
             fs.rmSync(dirB, { recursive: true, force: true });
         }
     });
+
+    it("expires orphaned subagents after subagentTtlMs and recovers WAITING_REVIEW / STOPPED state", async () => {
+        let fakeNow = 10_000;
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG, {
+            subagentTtlMs: 5_000,
+            now: () => fakeNow
+        });
+
+        await sm.handleHook({ event: "PreInvocation", conversationId: "root" });
+        await sm.handleHook({ event: "PreToolUse", conversationId: "sub-orphan", isSubagent: true, toolName: "search_web" });
+        await sm.handleHook({ event: "Stop", conversationId: "root", terminationReason: "NO_TOOL_CALL" });
+
+        // Root finished turn, but orphaned subagent keeps status in EXECUTING_TOOL
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+        assert.equal(sm.getActiveSubagentsCount(), 1);
+        assert.equal(sm.getNextSubagentExpiryMs(), 5_000);
+
+        // Advance before TTL: still active
+        fakeNow = 14_000;
+        assert.equal(sm.pruneStaleSubagents(), 0);
+        assert.equal(sm.getNextSubagentExpiryMs(), 1_000);
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+        // Advance past TTL: orphaned subagent pruned -> recovers to WAITING_REVIEW
+        fakeNow = 15_000;
+        assert.equal(sm.pruneStaleSubagents(), 1);
+        assert.equal((sm as any).sessions.has("sub-orphan"), false);
+        assert.equal(sm.getActiveSubagentsCount(), 0);
+        assert.equal(sm.getNextSubagentExpiryMs(), null);
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+        assert.equal(sm.getCurrentActivity()?.details, "Waiting for user review");
+    });
+
+    it("refreshes subagent TTL on activity and returns STOPPED when only orphaned subagent existed", async () => {
+        let fakeNow = 20_000;
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG, {
+            subagentTtlMs: 5_000,
+            now: () => fakeNow
+        });
+
+        await sm.handleHook({ event: "PreInvocation", conversationId: "sub-only", isSubagent: true });
+        fakeNow = 24_000;
+        // Heartbeat / tool event resets subagent updatedAt
+        await sm.handleHook({ event: "PreToolUse", conversationId: "sub-only", isSubagent: true, toolName: "read_file", toolArgs: { Path: "a.ts" } });
+
+        fakeNow = 26_000; // 2s since last update (< 5s TTL)
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+        fakeNow = 29_000; // 5s since last update (>= 5s TTL)
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.STOPPED);
+        assert.equal(sm.getCurrentActivity(), null);
+    });
 });
