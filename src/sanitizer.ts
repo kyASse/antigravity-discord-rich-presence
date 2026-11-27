@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { PrivacyProfile } from "./types.js";
 
 /**
  * Strips authentication credentials and normalizes Git remote URLs to standard web URLs.
@@ -110,40 +111,113 @@ export function sanitizeCommand(command: string, privacyMode: boolean = false): 
     return sanitized;
 }
 
+const SENSITIVE_DOTFILES = new Set([
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    ".htpasswd",
+    ".pgpass"
+]);
+
+/**
+ * Returns true if the given file path or filename matches sensitive credential,
+ * environment, key, or certificate patterns that should never leak to Discord.
+ */
+export function isSensitiveFilename(filePath: string): boolean {
+    if (!filePath || typeof filePath !== "string") {
+        return false;
+    }
+
+    const trimmed = filePath.trim();
+    if (!trimmed) {
+        return false;
+    }
+
+    const base = path.basename(trimmed.replace(/\\/g, "/")).toLowerCase();
+    if (!base) {
+        return false;
+    }
+
+    if (/^\.env(\.|$)/i.test(base)) {
+        return true;
+    }
+
+    if (/\.(pem|key|p12|pfx|jks|keystore|ppk)$/i.test(base)) {
+        return true;
+    }
+
+    if (/^id_(rsa|ed25519|ecdsa|dsa)(?:\.(?!pub$).*)?$/i.test(base)) {
+        return true;
+    }
+
+    if (SENSITIVE_DOTFILES.has(base)) {
+        return true;
+    }
+
+    if (base.includes("secret") || base.includes("credential")) {
+        return true;
+    }
+
+    if (/^service[-_]?account.*\.json$/i.test(base)) {
+        return true;
+    }
+
+    return false;
+}
+
 /**
  * Maps tool invocations and arguments to concise, user-friendly activity descriptions for Discord Rich Presence.
  */
 export function mapToolToAction(
     toolName: string,
     args?: Record<string, unknown>,
-    privacyMode: boolean = false
+    privacy: boolean | PrivacyProfile = false
 ): string {
     if (!toolName) {
         return "Executing tool";
     }
 
-    const getFilePath = (): string | undefined => {
+    const mode: PrivacyProfile =
+        privacy === true ? "stealth" : privacy === false ? "showcase" : privacy;
+
+    const getRawFilePath = (): string | undefined => {
         const raw = args?.Path ?? args?.path ?? args?.filePath ?? args?.file_path;
         if (typeof raw === "string" && raw.trim().length > 0) {
-            return path.basename(raw.trim().replace(/\\/g, "/"));
+            return raw.trim();
         }
         return undefined;
     };
 
+    const getDisplayFilename = (): { filename?: string; sensitive: boolean } => {
+        const raw = getRawFilePath();
+        if (!raw) {
+            return { sensitive: false };
+        }
+        if (isSensitiveFilename(raw)) {
+            return { sensitive: true };
+        }
+        return {
+            filename: path.basename(raw.replace(/\\/g, "/")),
+            sensitive: false
+        };
+    };
+
     switch (toolName) {
         case "read_file": {
-            const file = getFilePath();
-            return file ? `Reading ${file}` : "Reading file";
+            const { filename, sensitive } = getDisplayFilename();
+            if (sensitive) return "Reading sensitive file";
+            return filename ? `Reading ${filename}` : "Reading file";
         }
 
         case "write_file":
         case "edit_file": {
-            const file = getFilePath();
-            return file ? `Editing ${file}` : "Editing file";
+            const { filename, sensitive } = getDisplayFilename();
+            if (sensitive) return "Editing sensitive file";
+            return filename ? `Editing ${filename}` : "Editing file";
         }
 
         case "run_command": {
-            if (privacyMode) {
+            if (mode === "stealth" || mode === "balanced") {
                 if (args?.CommandLine && typeof args.CommandLine === "string" && args.CommandLine.trim().length > 0) {
                     const cmd = sanitizeCommand(args.CommandLine, true);
                     return cmd ? `Running: ${cmd}` : "Running command";

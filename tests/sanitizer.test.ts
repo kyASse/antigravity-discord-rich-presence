@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
     sanitizeGitUrl,
     sanitizeCommand,
+    isSensitiveFilename,
     mapToolToAction,
     truncateRpcText,
     validateRpcButtonUrl
@@ -112,6 +113,77 @@ describe("Sanitizer", () => {
         assert.equal(
             mapToolToAction("run_command", { toolSummary: "Deploy using TOKEN=ghp_1234567890abcdef" }, false),
             "Running: Deploy using TOKEN=***"
+        );
+    });
+
+    it("detects sensitive filenames while allowing normal source files", () => {
+        const sensitive = [
+            ".env",
+            ".env.local",
+            "/app/.env.production",
+            "C:\\keys\\server.pem",
+            "private.key",
+            "cert.p12",
+            "bundle.pfx",
+            "keystore.jks",
+            "app.keystore",
+            "putty.ppk",
+            "/home/user/.ssh/id_rsa",
+            "id_ed25519",
+            "id_ecdsa",
+            "id_dsa",
+            ".npmrc",
+            ".pypirc",
+            ".netrc",
+            ".htpasswd",
+            ".pgpass",
+            "secrets.json",
+            "client_secret.yaml",
+            "credentials.json",
+            "aws-credentials.toml",
+            "service-account-prod.json"
+        ];
+        for (const file of sensitive) {
+            assert.equal(isSensitiveFilename(file), true, `Expected sensitive: ${file}`);
+        }
+
+        const safe = [
+            "src/index.ts",
+            "src/config.ts",
+            "src/tokenizer.ts",
+            "src/auth.ts",
+            "/home/user/.ssh/id_rsa.pub",
+            ""
+        ];
+        for (const file of safe) {
+            assert.equal(isSensitiveFilename(file), false, `Expected non-sensitive: ${file}`);
+        }
+    });
+
+    it("applies balanced vs showcase vs stealth rules in mapToolToAction", () => {
+        assert.equal(mapToolToAction("read_file", { Path: "/app/.env.production" }, "balanced"), "Reading sensitive file");
+        assert.equal(mapToolToAction("edit_file", { Path: "C:\\repo\\secrets.json" }, "balanced"), "Editing sensitive file");
+        assert.equal(mapToolToAction("read_file", { Path: "src/index.ts" }, "balanced"), "Reading index.ts");
+        assert.equal(
+            mapToolToAction("run_command", { toolSummary: "Deploy app", CommandLine: "npm run deploy --token=abc" }, "balanced"),
+            "Running: npm"
+        );
+        assert.equal(mapToolToAction("run_command", { toolSummary: "Deploy app" }, "balanced"), "Running command");
+
+        assert.equal(mapToolToAction("read_file", { Path: "/app/.env" }, "showcase"), "Reading sensitive file");
+        assert.equal(mapToolToAction("write_file", { Path: "/app/id_rsa" }, "showcase"), "Editing sensitive file");
+        assert.equal(
+            mapToolToAction("run_command", { toolSummary: "Deploy using TOKEN=ghp_123456" }, "showcase"),
+            "Running: Deploy using TOKEN=***"
+        );
+        assert.equal(
+            mapToolToAction("run_command", { CommandLine: "npm test -- --grep auth" }, "showcase"),
+            "Running: npm test -- --grep auth"
+        );
+
+        assert.equal(
+            mapToolToAction("run_command", { toolSummary: "Secret", CommandLine: "git status" }, "stealth"),
+            "Running: git"
         );
     });
 });
