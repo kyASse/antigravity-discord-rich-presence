@@ -189,4 +189,92 @@ describe("Presence State Machine", () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    it("isolates cwd, gitInfo, and startTimestamp across concurrent workspaces and arbitrates by status then recency", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-b-"));
+        try {
+            execFileSync("git", ["init"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["config", "user.name", "Test User"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["checkout", "-b", "feat/alpha"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["config", "remote.origin.url", "https://github.com/org/repo-alpha.git"], { cwd: dirA, stdio: "ignore" });
+
+            execFileSync("git", ["init"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["config", "user.name", "Test User"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["checkout", "-b", "fix/beta"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["config", "remote.origin.url", "https://github.com/org/repo-beta.git"], { cwd: dirB, stdio: "ignore" });
+
+            let fakeNow = 1_000_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            // Workspace A starts THINKING at t=1_000_000
+            const actA = await sm.handleHook({ event: "PreInvocation", conversationId: "conv-a", cwd: dirA });
+            assert.equal(actA?.state, "Project: repo-alpha (feat/alpha)");
+            assert.equal(actA?.startTimestamp, 1_000_000);
+
+            // Workspace B starts EXECUTING_TOOL at t=1_005_000 -> higher priority wins
+            fakeNow = 1_005_000;
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "conv-b",
+                cwd: dirB,
+                toolName: "read_file",
+                toolArgs: { Path: "beta.ts" }
+            });
+            assert.equal(actB?.state, "Project: repo-beta (fix/beta)");
+            assert.equal(actB?.startTimestamp, 1_005_000);
+
+            // Follow-up hook for conv-b omitting cwd keeps Workspace B context
+            fakeNow = 1_006_000;
+            const actB2 = await sm.handleHook({ event: "PostToolUse", conversationId: "conv-b" });
+            assert.equal(actB2?.state, "Project: repo-beta (fix/beta)");
+
+            // Cancelling Workspace B must not clear or overwrite Workspace A's git/startTimestamp
+            fakeNow = 1_007_000;
+            const afterCancelB = await sm.handleHook({
+                event: "Stop",
+                conversationId: "conv-b",
+                terminationReason: "USER_CANCELED"
+            });
+            assert.equal(sm.getCurrentStatus(), PresenceStatus.THINKING);
+            assert.equal(afterCancelB?.state, "Project: repo-alpha (feat/alpha)");
+            assert.equal(afterCancelB?.startTimestamp, 1_000_000);
+            assert.deepEqual(afterCancelB?.buttons, [
+                { label: "View Repository", url: "https://github.com/org/repo-alpha" }
+            ]);
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
+
+    it("does not leak subagents from Workspace A into Workspace B's displayed details", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sub-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sub-b-"));
+        try {
+            let fakeNow = 2_000_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root-a", cwd: dirA });
+            await sm.handleHook({ event: "PreInvocation", conversationId: "sub-a", isSubagent: true, cwd: dirA });
+
+            fakeNow = 2_001_000;
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "root-b",
+                cwd: dirB,
+                toolName: "edit_file",
+                toolArgs: { Path: "main.ts" }
+            });
+            assert.equal(actB?.details, "Editing main.ts");
+            assert.equal(actB?.state, `Project: ${path.basename(dirB)}`);
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
 });
