@@ -189,4 +189,282 @@ describe("Presence State Machine", () => {
             fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
+
+    it("isolates cwd, gitInfo, and startTimestamp across concurrent workspaces and arbitrates by status then recency", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-b-"));
+        try {
+            execFileSync("git", ["init"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["config", "user.name", "Test User"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["checkout", "-b", "feat/alpha"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: dirA, stdio: "ignore" });
+            execFileSync("git", ["config", "remote.origin.url", "https://github.com/org/repo-alpha.git"], { cwd: dirA, stdio: "ignore" });
+
+            execFileSync("git", ["init"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["config", "user.name", "Test User"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["checkout", "-b", "fix/beta"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["commit", "--allow-empty", "-m", "init"], { cwd: dirB, stdio: "ignore" });
+            execFileSync("git", ["config", "remote.origin.url", "https://github.com/org/repo-beta.git"], { cwd: dirB, stdio: "ignore" });
+
+            let fakeNow = 1_000_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            // Workspace A starts THINKING at t=1_000_000
+            const actA = await sm.handleHook({ event: "PreInvocation", conversationId: "conv-a", cwd: dirA });
+            assert.equal(actA?.state, "Project: repo-alpha (feat/alpha)");
+            assert.equal(actA?.startTimestamp, 1_000_000);
+
+            // Workspace B starts EXECUTING_TOOL at t=1_005_000 -> higher priority wins
+            fakeNow = 1_005_000;
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "conv-b",
+                cwd: dirB,
+                toolName: "read_file",
+                toolArgs: { Path: "beta.ts" }
+            });
+            assert.equal(actB?.state, "Project: repo-beta (fix/beta)");
+            assert.equal(actB?.startTimestamp, 1_005_000);
+
+            // Follow-up hook for conv-b omitting cwd keeps Workspace B context
+            fakeNow = 1_006_000;
+            const actB2 = await sm.handleHook({ event: "PostToolUse", conversationId: "conv-b" });
+            assert.equal(actB2?.state, "Project: repo-beta (fix/beta)");
+
+            // Cancelling Workspace B must not clear or overwrite Workspace A's git/startTimestamp
+            fakeNow = 1_007_000;
+            const afterCancelB = await sm.handleHook({
+                event: "Stop",
+                conversationId: "conv-b",
+                terminationReason: "USER_CANCELED"
+            });
+            assert.equal(sm.getCurrentStatus(), PresenceStatus.THINKING);
+            assert.equal(afterCancelB?.state, "Project: repo-alpha (feat/alpha)");
+            assert.equal(afterCancelB?.startTimestamp, 1_000_000);
+            assert.deepEqual(afterCancelB?.buttons, [
+                { label: "View Repository", url: "https://github.com/org/repo-alpha" }
+            ]);
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
+
+    it("does not leak subagents from Workspace A into Workspace B's displayed details", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sub-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sub-b-"));
+        try {
+            let fakeNow = 2_000_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root-a", cwd: dirA });
+            await sm.handleHook({ event: "PreInvocation", conversationId: "sub-a", isSubagent: true, cwd: dirA });
+
+            fakeNow = 2_001_000;
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "root-b",
+                cwd: dirB,
+                toolName: "edit_file",
+                toolArgs: { Path: "main.ts" }
+            });
+            assert.equal(actB?.details, "Editing main.ts");
+            assert.equal(actB?.state, `Project: ${path.basename(dirB)}`);
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
+
+    it("expires orphaned subagents after subagentTtlMs and recovers WAITING_REVIEW / STOPPED state", async () => {
+        let fakeNow = 10_000;
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG, {
+            subagentTtlMs: 5_000,
+            now: () => fakeNow
+        });
+
+        await sm.handleHook({ event: "PreInvocation", conversationId: "root" });
+        await sm.handleHook({ event: "PreToolUse", conversationId: "sub-orphan", isSubagent: true, toolName: "search_web" });
+        await sm.handleHook({ event: "Stop", conversationId: "root", terminationReason: "NO_TOOL_CALL" });
+
+        // Root finished turn, but orphaned subagent keeps status in EXECUTING_TOOL
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+        assert.equal(sm.getActiveSubagentsCount(), 1);
+        assert.equal(sm.getNextSubagentExpiryMs(), 5_000);
+
+        // Advance before TTL: still active
+        fakeNow = 14_000;
+        assert.equal(sm.pruneStaleSubagents(), 0);
+        assert.equal(sm.getNextSubagentExpiryMs(), 1_000);
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+        // Advance past TTL: orphaned subagent pruned -> recovers to WAITING_REVIEW
+        fakeNow = 15_000;
+        assert.equal(sm.pruneStaleSubagents(), 1);
+        assert.equal((sm as any).sessions.has("sub-orphan"), false);
+        assert.equal(sm.getActiveSubagentsCount(), 0);
+        assert.equal(sm.getNextSubagentExpiryMs(), null);
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+        assert.equal(sm.getCurrentActivity()?.details, "Waiting for user review");
+    });
+
+    it("refreshes subagent TTL on activity, returns STOPPED when only orphaned subagent existed, and resets startTimestamp on new session", async () => {
+        let fakeNow = 20_000;
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG, {
+            subagentTtlMs: 5_000,
+            now: () => fakeNow
+        });
+
+        await sm.handleHook({ event: "PreInvocation", conversationId: "sub-only", isSubagent: true });
+        fakeNow = 24_000;
+        // Heartbeat / tool event resets subagent updatedAt
+        await sm.handleHook({ event: "PreToolUse", conversationId: "sub-only", isSubagent: true, toolName: "read_file", toolArgs: { Path: "a.ts" } });
+
+        fakeNow = 26_000; // 2s since last update (< 5s TTL)
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+        fakeNow = 29_000; // 5s since last update (>= 5s TTL)
+        assert.equal(sm.getCurrentStatus(), PresenceStatus.STOPPED);
+        assert.equal(sm.getCurrentActivity(), null);
+
+        // New session after orphaned subagents expired gets a fresh startTimestamp
+        fakeNow = 50_000;
+        const fresh = await sm.handleHook({ event: "PreInvocation", conversationId: "fresh-root" });
+        assert.equal(fresh?.startTimestamp, 50_000);
+    });
+
+    it("populates Discord RPC party metrics during active subagent swarms, clears when subagents end, and resets peak across consecutive swarms", async () => {
+        let fakeNow = 10_000;
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+        // Primary agent alone: no party
+        const solo = await sm.handleHook({ event: "PreInvocation", conversationId: "root-swarm" });
+        assert.equal(solo?.party, undefined);
+
+        // 2 subagents join -> 3 active agents of peak 3
+        fakeNow = 10_100;
+        await sm.handleHook({ event: "PreInvocation", conversationId: "sub-1", isSubagent: true });
+        fakeNow = 10_200;
+        const swarm3 = await sm.handleHook({
+            event: "PreToolUse",
+            conversationId: "sub-2",
+            isSubagent: true,
+            toolName: "search_web"
+        });
+        assert.deepEqual(swarm3?.party, { id: "root-swarm", size: [3, 3] });
+
+        // 1 subagent completes -> 2 active of peak 3
+        fakeNow = 10_300;
+        const swarm2 = await sm.handleHook({
+            event: "Stop",
+            conversationId: "sub-2",
+            isSubagent: true,
+            terminationReason: "NO_TOOL_CALL"
+        });
+        assert.deepEqual(swarm2?.party, { id: "root-swarm", size: [2, 3] });
+
+        // Last subagent completes -> party cleared
+        fakeNow = 10_400;
+        const backToSolo = await sm.handleHook({
+            event: "Stop",
+            conversationId: "sub-1",
+            isSubagent: true,
+            terminationReason: "NO_TOOL_CALL"
+        });
+        assert.equal(backToSolo?.party, undefined);
+
+        // Consecutive swarm resets peakActiveAgents back to [2, 2]
+        fakeNow = 10_500;
+        const nextSwarm = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-3", isSubagent: true });
+        assert.deepEqual(nextSwarm?.party, { id: "root-swarm", size: [2, 2] });
+    });
+
+    it("falls back to antigravity-swarm party.id when no non-subagent primary session exists in the winning workspace", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sub-only-"));
+        try {
+            let fakeNow = 30_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "sub-only-1", isSubagent: true, cwd: dirA });
+            fakeNow = 30_100;
+            const act = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-only-2", isSubagent: true, cwd: dirA });
+            assert.deepEqual(act?.party, { id: "antigravity-swarm", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+        }
+    });
+
+    it("prevents unscoped subagent in DEFAULT_WORKSPACE_KEY from hijacking an active non-default workspace", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-unscoped-"));
+        try {
+            let fakeNow = 1_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root", cwd: dirA });
+            fakeNow = 1_001;
+            const act = await sm.handleHook({ event: "PreInvocation", conversationId: "sub1", isSubagent: true });
+
+            assert.equal(act?.state, `Project: ${path.basename(dirA)}`);
+            assert.equal(act?.startTimestamp, 1_000);
+            assert.deepEqual(act?.party, { id: "root", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+        }
+    });
+
+    it("scopes SessionEnd to target workspace without stopping other active workspaces", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-end-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-end-b-"));
+        try {
+            let fakeNow = 40_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "conv-a", cwd: dirA });
+            fakeNow = 40_100;
+            await sm.handleHook({ event: "PreInvocation", conversationId: "conv-b", cwd: dirB });
+
+            fakeNow = 40_200;
+            const afterEndB = await sm.handleHook({ event: "SessionEnd", conversationId: "conv-b" });
+            assert.equal(sm.getCurrentStatus(), PresenceStatus.THINKING);
+            assert.equal(afterEndB?.state, `Project: ${path.basename(dirA)}`);
+            assert.equal(afterEndB?.startTimestamp, 40_000);
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
+
+    it("caps party.id to 128 characters and isolates party counts per workspace", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "party-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "party-b-"));
+        try {
+            let fakeNow = 5_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+            const longConvId = "swarm-" + "x".repeat(150);
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: longConvId, cwd: dirA });
+            const actA = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-a1", isSubagent: true, cwd: dirA });
+            assert.ok(actA?.party);
+            assert.ok(actA.party.id.length >= 2 && actA.party.id.length <= 128);
+            assert.deepEqual(actA.party.size, [2, 2]);
+
+            // Workspace B with 1 subagent only counts its own agents
+            fakeNow = 6_000;
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root-b", cwd: dirB });
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "sub-b1",
+                isSubagent: true,
+                cwd: dirB,
+                toolName: "read_file",
+                toolArgs: { Path: "index.ts" }
+            });
+            assert.deepEqual(actB?.party, { id: "root-b", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
 });

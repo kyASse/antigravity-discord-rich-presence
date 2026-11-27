@@ -2,6 +2,7 @@ import path from "node:path";
 import {
     PresenceStatus,
     DEFAULT_CONFIG,
+    DEFAULT_SUBAGENT_TTL_MS,
     type HookPayload,
     type PresenceActivity,
     type PluginConfig
@@ -9,8 +10,21 @@ import {
 import { mapToolToAction, truncateRpcText, validateRpcButtonUrl } from "./sanitizer.js";
 import { getGitInfo, type GitInfo } from "./git.js";
 
+export const DEFAULT_WORKSPACE_KEY = "__default__";
+
+export function normalizeWorkspaceKey(cwd: string): string {
+    const resolved = path.resolve(cwd);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export interface PresenceStateMachineOptions {
+    subagentTtlMs?: number;
+    now?: () => number;
+}
+
 interface SessionState {
     conversationId: string;
+    workspaceKey: string;
     isSubagent: boolean;
     status: PresenceStatus;
     toolName?: string;
@@ -18,64 +32,190 @@ interface SessionState {
     updatedAt: number;
 }
 
+interface WorkspaceContext {
+    key: string;
+    cwd: string;
+    gitInfo?: GitInfo;
+    lastGitFetchTime: number;
+    startTimestamp?: number;
+    peakActiveAgents: number;
+    updatedAt: number;
+}
+
+const STATUS_PRIORITY: Record<PresenceStatus, number> = {
+    [PresenceStatus.EXECUTING_TOOL]: 4,
+    [PresenceStatus.THINKING]: 3,
+    [PresenceStatus.WAITING_REVIEW]: 2,
+    [PresenceStatus.IDLE]: 1,
+    [PresenceStatus.STOPPED]: 0
+};
+
 /**
- * Manages agent lifecycle presence states, subagent arbitration,
+ * Manages agent lifecycle presence states, workspace isolation, subagent arbitration,
  * idle timeouts, and Discord Rich Presence formatting.
  */
 export class PresenceStateMachine {
     public readonly config: PluginConfig;
+    private readonly subagentTtlMs: number;
+    private readonly now: () => number;
     private readonly sessions = new Map<string, SessionState>();
-    private startTimestamp?: number;
-    private cwd?: string;
-    private gitInfo?: GitInfo;
-    private lastGitCwd?: string;
-    private lastGitFetchTime: number = 0;
+    private readonly workspaces = new Map<string, WorkspaceContext>();
 
     private readonly largeImageKey = "antigravity";
     private readonly largeImageText = "Antigravity";
 
-    constructor(config: PluginConfig = DEFAULT_CONFIG) {
+    constructor(config: PluginConfig = DEFAULT_CONFIG, options: PresenceStateMachineOptions = {}) {
         this.config = config;
+        this.subagentTtlMs = options.subagentTtlMs ?? DEFAULT_SUBAGENT_TTL_MS;
+        this.now = options.now ?? (() => Date.now());
     }
 
-    /**
-     * Determines the overall presence status across all tracked sessions based on precedence:
-     * EXECUTING_TOOL > THINKING > WAITING_REVIEW > IDLE > STOPPED
-     */
-    public getCurrentStatus(): PresenceStatus {
-        let hasExecutingTool = false;
-        let hasThinking = false;
-        let hasWaitingReview = false;
-        let hasIdle = false;
+    private getWorkspaceStatus(workspaceKey: string): PresenceStatus {
+        let bestStatus = PresenceStatus.STOPPED;
+        let bestPriority = STATUS_PRIORITY[PresenceStatus.STOPPED];
 
         for (const session of this.sessions.values()) {
-            switch (session.status) {
-                case PresenceStatus.EXECUTING_TOOL:
-                    hasExecutingTool = true;
-                    break;
-                case PresenceStatus.THINKING:
-                    hasThinking = true;
-                    break;
-                case PresenceStatus.WAITING_REVIEW:
-                    hasWaitingReview = true;
-                    break;
-                case PresenceStatus.IDLE:
-                    hasIdle = true;
-                    break;
+            if (session.workspaceKey !== workspaceKey) continue;
+            const priority = STATUS_PRIORITY[session.status];
+            if (priority > bestPriority) {
+                bestPriority = priority;
+                bestStatus = session.status;
             }
         }
 
-        if (hasExecutingTool) return PresenceStatus.EXECUTING_TOOL;
-        if (hasThinking) return PresenceStatus.THINKING;
-        if (hasWaitingReview) return PresenceStatus.WAITING_REVIEW;
-        if (hasIdle) return PresenceStatus.IDLE;
-        return PresenceStatus.STOPPED;
+        return bestStatus;
+    }
+
+    private hasActiveNonSubagentSession(workspaceKey: string): boolean {
+        for (const session of this.sessions.values()) {
+            if (
+                session.workspaceKey === workspaceKey &&
+                !session.isSubagent &&
+                session.status !== PresenceStatus.STOPPED
+            ) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
-     * Returns the count of currently active subagents (actively thinking or running tools).
+     * Selects the active workspace with highest status precedence,
+     * tie-broken by most recent workspace update timestamp.
+     * Skips DEFAULT_WORKSPACE_KEY when a non-default workspace is active and
+     * DEFAULT_WORKSPACE_KEY has no active primary (non-subagent) session.
      */
-    public getActiveSubagentsCount(): number {
+    private getWinningWorkspace(): { workspace: WorkspaceContext; status: PresenceStatus } | null {
+        let hasActiveNonDefault = false;
+        for (const workspace of this.workspaces.values()) {
+            if (
+                workspace.key !== DEFAULT_WORKSPACE_KEY &&
+                this.getWorkspaceStatus(workspace.key) !== PresenceStatus.STOPPED
+            ) {
+                hasActiveNonDefault = true;
+                break;
+            }
+        }
+
+        const skipDefaultWorkspace =
+            hasActiveNonDefault && !this.hasActiveNonSubagentSession(DEFAULT_WORKSPACE_KEY);
+
+        let bestWorkspace: WorkspaceContext | null = null;
+        let bestStatus = PresenceStatus.STOPPED;
+        let bestPriority = STATUS_PRIORITY[PresenceStatus.STOPPED];
+        let bestUpdatedAt = -1;
+
+        for (const workspace of this.workspaces.values()) {
+            if (workspace.key === DEFAULT_WORKSPACE_KEY && skipDefaultWorkspace) continue;
+
+            const status = this.getWorkspaceStatus(workspace.key);
+            if (status === PresenceStatus.STOPPED) continue;
+
+            const priority = STATUS_PRIORITY[status];
+            if (
+                priority > bestPriority ||
+                (priority === bestPriority && workspace.updatedAt >= bestUpdatedAt)
+            ) {
+                bestWorkspace = workspace;
+                bestStatus = status;
+                bestPriority = priority;
+                bestUpdatedAt = workspace.updatedAt;
+            }
+        }
+
+        if (!bestWorkspace) {
+            return null;
+        }
+
+        return { workspace: bestWorkspace, status: bestStatus };
+    }
+
+    /**
+     * Prunes orphaned subagent sessions whose last activity exceeded subagentTtlMs.
+     * Resets workspace timer/peak metrics if pruning leaves a workspace STOPPED.
+     */
+    public pruneStaleSubagents(now: number = this.now()): number {
+        let prunedCount = 0;
+        const affectedWorkspaces = new Set<string>();
+
+        for (const [id, session] of this.sessions.entries()) {
+            if (session.isSubagent && now - session.updatedAt >= this.subagentTtlMs) {
+                this.sessions.delete(id);
+                affectedWorkspaces.add(session.workspaceKey);
+                prunedCount++;
+            }
+        }
+
+        for (const workspaceKey of affectedWorkspaces) {
+            const ws = this.workspaces.get(workspaceKey);
+            if (ws) {
+                this.syncWorkspaceLifecycle(ws);
+            }
+        }
+
+        return prunedCount;
+    }
+
+    private syncWorkspaceLifecycle(ws: WorkspaceContext): void {
+        const wsStatus = this.getWorkspaceStatus(ws.key);
+        if (wsStatus === PresenceStatus.STOPPED) {
+            ws.startTimestamp = undefined;
+            ws.peakActiveAgents = 0;
+        } else if (
+            this.countActiveSubagents(ws.key) === 0 ||
+            (wsStatus !== PresenceStatus.THINKING && wsStatus !== PresenceStatus.EXECUTING_TOOL)
+        ) {
+            ws.peakActiveAgents = 0;
+        }
+    }
+
+    /**
+     * Returns milliseconds until the next active subagent expires, or null if none exist.
+     */
+    public getNextSubagentExpiryMs(now: number = this.now()): number | null {
+        let minRemaining: number | null = null;
+
+        for (const session of this.sessions.values()) {
+            if (!session.isSubagent) continue;
+            const remaining = Math.max(1, this.subagentTtlMs - (now - session.updatedAt));
+            if (minRemaining === null || remaining < minRemaining) {
+                minRemaining = remaining;
+            }
+        }
+
+        return minRemaining;
+    }
+
+    /**
+     * Determines the overall presence status across all tracked workspaces based on precedence:
+     * EXECUTING_TOOL > THINKING > WAITING_REVIEW > IDLE > STOPPED
+     */
+    public getCurrentStatus(): PresenceStatus {
+        this.pruneStaleSubagents(this.now());
+        return this.getWinningWorkspace()?.status ?? PresenceStatus.STOPPED;
+    }
+
+    private countActiveSubagents(workspaceKey?: string): number {
         let count = 0;
         for (const session of this.sessions.values()) {
             if (
@@ -83,48 +223,94 @@ export class PresenceStateMachine {
                 (session.status === PresenceStatus.THINKING ||
                     session.status === PresenceStatus.EXECUTING_TOOL)
             ) {
-                count++;
+                if (
+                    workspaceKey === undefined ||
+                    session.workspaceKey === workspaceKey ||
+                    (workspaceKey !== DEFAULT_WORKSPACE_KEY &&
+                        session.workspaceKey === DEFAULT_WORKSPACE_KEY)
+                ) {
+                    count++;
+                }
             }
         }
         return count;
     }
 
     /**
-     * Handles incoming Antigravity lifecycle hooks, updates session registry,
-     * performs subagent arbitration, and generates updated presence activity.
+     * Returns the count of currently active subagents (actively thinking or running tools).
+     * When workspaceKey is provided, scopes to that workspace (plus unassigned default subagents).
+     */
+    public getActiveSubagentsCount(workspaceKey?: string): number {
+        this.pruneStaleSubagents(this.now());
+        return this.countActiveSubagents(workspaceKey);
+    }
+
+    /**
+     * Handles incoming Antigravity lifecycle hooks, updates workspace and session registries,
+     * performs workspace and subagent arbitration, and generates updated presence activity.
      */
     public async handleHook(payload: HookPayload): Promise<PresenceActivity | null> {
         const convId = payload.conversationId || "default";
-        const now = Date.now();
-
-        if (payload.cwd) {
-            this.cwd = payload.cwd;
-        }
-        if (!this.cwd) {
-            this.cwd = process.cwd();
-        }
-
-        // Cache git metadata for 5 seconds per working directory
-        if (!this.gitInfo || this.cwd !== this.lastGitCwd || now - this.lastGitFetchTime > 5000) {
-            try {
-                this.gitInfo = await getGitInfo(this.cwd);
-            } catch {
-                this.gitInfo = {};
-            }
-            this.lastGitCwd = this.cwd;
-            this.lastGitFetchTime = now;
-        }
+        const now = this.now();
+        this.pruneStaleSubagents(now);
 
         let session = this.sessions.get(convId);
+        const trimmedCwd = payload.cwd?.trim();
+        let resolvedCwd: string | undefined;
+        let targetWorkspaceKey: string;
+
+        if (trimmedCwd) {
+            resolvedCwd = path.resolve(trimmedCwd);
+            targetWorkspaceKey = normalizeWorkspaceKey(resolvedCwd);
+        } else if (session) {
+            targetWorkspaceKey = session.workspaceKey;
+        } else {
+            targetWorkspaceKey = DEFAULT_WORKSPACE_KEY;
+        }
+
+        let workspace = this.workspaces.get(targetWorkspaceKey);
+        if (!workspace) {
+            workspace = {
+                key: targetWorkspaceKey,
+                cwd: resolvedCwd ?? process.cwd(),
+                lastGitFetchTime: 0,
+                peakActiveAgents: 0,
+                updatedAt: now
+            };
+            this.workspaces.set(targetWorkspaceKey, workspace);
+        } else {
+            if (resolvedCwd) {
+                workspace.cwd = resolvedCwd;
+            }
+            workspace.updatedAt = now;
+        }
+
+        // Cache git metadata for 5 seconds per workspace independently
+        if (!workspace.gitInfo || now - workspace.lastGitFetchTime > 5000) {
+            try {
+                workspace.gitInfo = await getGitInfo(workspace.cwd);
+            } catch {
+                workspace.gitInfo = {};
+            }
+            workspace.lastGitFetchTime = now;
+        }
+
+        session = this.sessions.get(convId);
+        if (!trimmedCwd && session) {
+            targetWorkspaceKey = session.workspaceKey;
+            workspace = this.workspaces.get(targetWorkspaceKey) ?? workspace;
+        }
         if (!session) {
             session = {
                 conversationId: convId,
+                workspaceKey: targetWorkspaceKey,
                 isSubagent: payload.isSubagent ?? false,
                 status: PresenceStatus.STOPPED,
                 updatedAt: now
             };
             this.sessions.set(convId, session);
         } else {
+            session.workspaceKey = targetWorkspaceKey;
             if (payload.isSubagent !== undefined) {
                 session.isSubagent = payload.isSubagent;
             }
@@ -137,8 +323,8 @@ export class PresenceStateMachine {
                 session.status = PresenceStatus.THINKING;
                 session.toolName = undefined;
                 session.toolArgs = undefined;
-                if (!this.startTimestamp) {
-                    this.startTimestamp = now;
+                if (!workspace.startTimestamp) {
+                    workspace.startTimestamp = now;
                 }
                 break;
             }
@@ -147,8 +333,8 @@ export class PresenceStateMachine {
                 session.status = PresenceStatus.EXECUTING_TOOL;
                 session.toolName = payload.toolName;
                 session.toolArgs = payload.toolArgs;
-                if (!this.startTimestamp) {
-                    this.startTimestamp = now;
+                if (!workspace.startTimestamp) {
+                    workspace.startTimestamp = now;
                 }
                 break;
             }
@@ -181,10 +367,12 @@ export class PresenceStateMachine {
                         session.status = PresenceStatus.WAITING_REVIEW;
                     }
                 } else {
-                    // Explicit cancellation or abnormal session termination
+                    // Explicit cancellation or abnormal session termination scoped to workspace
                     if (!session.isSubagent) {
                         for (const s of this.sessions.values()) {
-                            s.status = PresenceStatus.STOPPED;
+                            if (s.workspaceKey === targetWorkspaceKey) {
+                                s.status = PresenceStatus.STOPPED;
+                            }
                         }
                     } else {
                         session.status = PresenceStatus.STOPPED;
@@ -195,7 +383,9 @@ export class PresenceStateMachine {
 
             case "SessionEnd": {
                 for (const s of this.sessions.values()) {
-                    s.status = PresenceStatus.STOPPED;
+                    if (s.workspaceKey === targetWorkspaceKey) {
+                        s.status = PresenceStatus.STOPPED;
+                    }
                 }
                 break;
             }
@@ -209,19 +399,34 @@ export class PresenceStateMachine {
             this.sessions.delete(convId);
         }
 
-        const currentStatus = this.getCurrentStatus();
-        if (currentStatus === PresenceStatus.STOPPED) {
-            this.startTimestamp = undefined;
-            return null;
+        if (
+            payload.event === "SessionEnd" ||
+            (payload.event === "Stop" && payload.terminationReason !== "NO_TOOL_CALL" && !session.isSubagent)
+        ) {
+            for (const [id, s] of this.sessions.entries()) {
+                if (
+                    s.workspaceKey === targetWorkspaceKey &&
+                    s.isSubagent &&
+                    s.status === PresenceStatus.STOPPED
+                ) {
+                    this.sessions.delete(id);
+                }
+            }
         }
 
-        return this.buildActivity(currentStatus);
+        for (const ws of this.workspaces.values()) {
+            this.syncWorkspaceLifecycle(ws);
+        }
+
+        return this.buildActivity();
     }
 
     /**
      * Handles 5-minute inactivity timeout, transitioning WAITING_REVIEW sessions to IDLE.
      */
     public handleIdleTimeout(): PresenceActivity | null {
+        const now = this.now();
+        this.pruneStaleSubagents(now);
         const current = this.getCurrentStatus();
         if (current === PresenceStatus.WAITING_REVIEW) {
             for (const session of this.sessions.values()) {
@@ -229,11 +434,11 @@ export class PresenceStateMachine {
                     session.status = PresenceStatus.IDLE;
                 }
             }
-            return this.buildActivity(PresenceStatus.IDLE);
+            return this.buildActivity();
         }
 
         if (current === PresenceStatus.IDLE) {
-            return this.buildActivity(PresenceStatus.IDLE);
+            return this.buildActivity();
         }
 
         if (current === PresenceStatus.STOPPED) {
@@ -241,16 +446,19 @@ export class PresenceStateMachine {
         }
 
         // Active tool execution or thinking does not transition to IDLE
-        return this.buildActivity(current);
+        return this.buildActivity();
     }
 
     /**
-     * Finds the session currently executing a tool, preferring the most recent.
+     * Finds the session currently executing a tool in the given workspace, preferring the most recent.
      */
-    private getExecutingSession(): SessionState | undefined {
+    private getExecutingSession(workspaceKey: string): SessionState | undefined {
         let latest: SessionState | undefined;
         for (const session of this.sessions.values()) {
-            if (session.status === PresenceStatus.EXECUTING_TOOL) {
+            if (
+                session.workspaceKey === workspaceKey &&
+                session.status === PresenceStatus.EXECUTING_TOOL
+            ) {
                 if (!latest || session.updatedAt >= latest.updatedAt) {
                     latest = session;
                 }
@@ -260,19 +468,40 @@ export class PresenceStateMachine {
     }
 
     /**
+     * Prunes stale subagents once and returns the prune count along with the resulting status and activity.
+     */
+    public reapStaleSubagents(): {
+        prunedCount: number;
+        status: PresenceStatus;
+        activity: PresenceActivity | null;
+    } {
+        const prunedCount = this.pruneStaleSubagents(this.now());
+        const winning = this.getWinningWorkspace();
+        if (!winning) {
+            return { prunedCount, status: PresenceStatus.STOPPED, activity: null };
+        }
+        return {
+            prunedCount,
+            status: winning.status,
+            activity: this.buildActivity(winning)
+        };
+    }
+
+    /**
      * Returns the currently active PresenceActivity payload, or null if stopped.
      */
     public getCurrentActivity(): PresenceActivity | null {
-        return this.buildActivity(this.getCurrentStatus());
+        this.pruneStaleSubagents(this.now());
+        return this.buildActivity();
     }
 
     /**
      * Formats repository action buttons for Discord Rich Presence.
      * Enforces valid HTTP/HTTPS URL, max 512 URL length, max 32 label length, max 2 buttons.
      */
-    private getButtons(): Array<{ label: string; url: string }> | undefined {
-        if (this.config.showRepoButton && !this.config.privacyMode && this.gitInfo?.remoteUrl) {
-            const validUrl = validateRpcButtonUrl(this.gitInfo.remoteUrl);
+    private getButtons(workspace: WorkspaceContext): Array<{ label: string; url: string }> | undefined {
+        if (this.config.showRepoButton && !this.config.privacyMode && workspace.gitInfo?.remoteUrl) {
+            const validUrl = validateRpcButtonUrl(workspace.gitInfo.remoteUrl);
             const validLabel = truncateRpcText("View Repository", 32);
             if (validUrl && validLabel) {
                 const buttons = [{ label: validLabel, url: validUrl }];
@@ -283,12 +512,12 @@ export class PresenceStateMachine {
     }
 
     /**
-     * Formats the Discord state string showing project and branch info.
+     * Formats the Discord state string showing project and branch info for the winning workspace.
      * Truncates output to Discord's 128 character limit.
      */
-    private formatState(status: PresenceStatus): string | undefined {
-        const repoName = this.gitInfo?.repoName || (this.cwd ? path.basename(this.cwd) : undefined);
-        const branch = this.gitInfo?.branch;
+    private formatState(workspace: WorkspaceContext, status: PresenceStatus): string | undefined {
+        const repoName = workspace.gitInfo?.repoName || (workspace.cwd ? path.basename(workspace.cwd) : undefined);
+        const branch = workspace.gitInfo?.branch;
 
         let rawState: string | undefined;
 
@@ -308,22 +537,69 @@ export class PresenceStateMachine {
     }
 
     /**
-     * Constructs the full PresenceActivity payload based on current status and active sessions.
+     * Computes Discord RPC party metrics for an active subagent swarm in the winning workspace.
+     * Resets peakActiveAgents when no subagents are active or the workspace is not actively working.
      */
-    private buildActivity(status: PresenceStatus): PresenceActivity | null {
-        if (status === PresenceStatus.STOPPED) {
+    private buildPartyMetrics(
+        workspace: WorkspaceContext,
+        status: PresenceStatus,
+        subCount: number
+    ): PresenceActivity["party"] {
+        if ((status !== PresenceStatus.THINKING && status !== PresenceStatus.EXECUTING_TOOL) || subCount <= 0) {
+            workspace.peakActiveAgents = 0;
+            return undefined;
+        }
+
+        let activePrimary: SessionState | undefined;
+        let fallbackPrimary: SessionState | undefined;
+
+        for (const session of this.sessions.values()) {
+            if (session.workspaceKey !== workspace.key || session.isSubagent) continue;
+
+            const isActive =
+                session.status === PresenceStatus.THINKING ||
+                session.status === PresenceStatus.EXECUTING_TOOL;
+
+            if (isActive && (!activePrimary || session.updatedAt >= activePrimary.updatedAt)) {
+                activePrimary = session;
+            }
+            if (!fallbackPrimary || session.updatedAt >= fallbackPrimary.updatedAt) {
+                fallbackPrimary = session;
+            }
+        }
+
+        const activeAgents = (activePrimary ? 1 : 0) + subCount;
+        workspace.peakActiveAgents = Math.max(workspace.peakActiveAgents, activeAgents);
+
+        const rawPartyId = activePrimary?.conversationId ?? fallbackPrimary?.conversationId ?? "antigravity-swarm";
+        const partyId = truncateRpcText(rawPartyId, 128) || "antigravity-swarm";
+
+        return {
+            id: partyId,
+            size: [activeAgents, workspace.peakActiveAgents]
+        };
+    }
+
+    /**
+     * Constructs the full PresenceActivity payload for the winning workspace.
+     */
+    private buildActivity(
+        winning: { workspace: WorkspaceContext; status: PresenceStatus } | null = this.getWinningWorkspace()
+    ): PresenceActivity | null {
+        if (!winning) {
             return null;
         }
 
-        if (!this.startTimestamp) {
-            this.startTimestamp = Date.now();
+        const { workspace, status } = winning;
+        if (!workspace.startTimestamp) {
+            workspace.startTimestamp = this.now();
         }
 
         let details: string | undefined;
         let smallImageKey: string;
         let smallImageText: string;
 
-        const subCount = this.getActiveSubagentsCount();
+        const subCount = this.countActiveSubagents(workspace.key);
 
         switch (status) {
             case PresenceStatus.THINKING: {
@@ -335,7 +611,7 @@ export class PresenceStateMachine {
             }
 
             case PresenceStatus.EXECUTING_TOOL: {
-                const activeSession = this.getExecutingSession();
+                const activeSession = this.getExecutingSession(workspace.key);
                 const action = mapToolToAction(
                     activeSession?.toolName || "",
                     activeSession?.toolArgs,
@@ -372,15 +648,22 @@ export class PresenceStateMachine {
                 return null;
         }
 
-        return {
+        const party = this.buildPartyMetrics(workspace, status, subCount);
+        const activity: PresenceActivity = {
             details: truncateRpcText(details, 128),
-            state: this.formatState(status),
-            startTimestamp: this.startTimestamp,
+            state: this.formatState(workspace, status),
+            startTimestamp: workspace.startTimestamp,
             largeImageKey: this.largeImageKey,
             largeImageText: truncateRpcText(this.largeImageText, 128),
             smallImageKey,
             smallImageText: truncateRpcText(smallImageText, 128),
-            buttons: this.getButtons()
+            buttons: this.getButtons(workspace)
         };
+
+        if (party) {
+            activity.party = party;
+        }
+
+        return activity;
     }
 }

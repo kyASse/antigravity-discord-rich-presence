@@ -506,4 +506,101 @@ describe("RPC Daemon Core", () => {
             await daemon.stop();
         }
     });
+
+    it("forwards partyId/partySize/partyMax to Discord RPC and triggers updates on party size changes", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-party-${process.pid}`
+            : `/tmp/agy-daemon-party-${process.pid}.sock`;
+
+        const setCalls: any[] = [];
+        const mockRpc = {
+            login: async () => {},
+            destroy: async () => {},
+            user: {
+                setActivity: async (act: any) => {
+                    setCalls.push(act);
+                    return act;
+                },
+                clearActivity: async () => {}
+            }
+        };
+
+        const daemon = new RpcDaemon(DEFAULT_CONFIG, {
+            ipcPath: testPipe,
+            throttleMs: 0,
+            rpcClient: mockRpc as any
+        });
+
+        try {
+            await daemon.start();
+            await daemon.handlePayload({ event: "PreInvocation", conversationId: "root-p" });
+            await daemon.handlePayload({ event: "PreInvocation", conversationId: "sub-p1", isSubagent: true });
+            await daemon.handlePayload({ event: "PreInvocation", conversationId: "sub-p2", isSubagent: true });
+            await daemon.handlePayload({ event: "Stop", conversationId: "sub-p2", isSubagent: true, terminationReason: "NO_TOOL_CALL" });
+            await daemon.handlePayload({ event: "Stop", conversationId: "sub-p1", isSubagent: true, terminationReason: "NO_TOOL_CALL" });
+
+            assert.equal(setCalls.length, 5);
+            assert.equal(setCalls[0].partyId, undefined);
+            assert.equal(setCalls[1].partyId, "root-p");
+            assert.equal(setCalls[1].partySize, 2);
+            assert.equal(setCalls[1].partyMax, 2);
+            assert.equal(setCalls[2].partySize, 3);
+            assert.equal(setCalls[2].partyMax, 3);
+            assert.equal(setCalls[3].partySize, 2);
+            assert.equal(setCalls[3].partyMax, 3);
+            assert.equal(setCalls[4].partyId, undefined);
+        } finally {
+            await daemon.stop();
+        }
+    });
+
+    it("automatically prunes orphaned subagents via reaper timer and transitions to WAITING_REVIEW / IDLE", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-reaper-${process.pid}`
+            : `/tmp/agy-daemon-reaper-${process.pid}.sock`;
+
+        const setCalls: any[] = [];
+        const mockRpc = {
+            login: async () => {},
+            destroy: async () => {},
+            user: {
+                setActivity: async (act: any) => {
+                    setCalls.push(act);
+                    return act;
+                },
+                clearActivity: async () => {}
+            }
+        };
+
+        const daemon = new RpcDaemon(
+            { ...DEFAULT_CONFIG, idleTimeoutSeconds: 0.15 },
+            {
+                ipcPath: testPipe,
+                throttleMs: 0,
+                subagentTtlMs: 40,
+                rpcClient: mockRpc as any
+            }
+        );
+
+        try {
+            await daemon.start();
+            await daemon.handlePayload({ event: "PreInvocation", conversationId: "root-r" });
+            await daemon.handlePayload({ event: "PreToolUse", conversationId: "sub-r", isSubagent: true, toolName: "search_web" });
+            await daemon.handlePayload({ event: "Stop", conversationId: "root-r", terminationReason: "NO_TOOL_CALL" });
+
+            assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.EXECUTING_TOOL);
+
+            // Wait for subagent TTL reaper (40ms) without sending any new IPC events
+            await new Promise((r) => setTimeout(r, 70));
+            assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+            assert.ok(setCalls.some((c) => c.details === "Waiting for user review"));
+
+            // Wait for idleTimer (150ms) armed after reaper recovery
+            await new Promise((r) => setTimeout(r, 170));
+            assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.IDLE);
+            assert.ok(setCalls.some((c) => c.details === "Idling in workspace"));
+        } finally {
+            await daemon.stop();
+        }
+    });
 });

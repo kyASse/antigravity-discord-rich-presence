@@ -4,6 +4,7 @@ import { IpcServer } from "./ipc.js";
 import {
     DEFAULT_CONFIG,
     loadConfigFromEnv,
+    loadSubagentTtlMsFromEnv,
     loadWatchdogTimeoutMsFromEnv,
     PresenceStatus,
     decodeInitialPayload,
@@ -21,6 +22,7 @@ export interface DaemonOptions {
     reconnectMaxMs?: number;
     watchdogMs?: number;
     activeWatchdogMs?: number;
+    subagentTtlMs?: number;
     onWatchdogExit?: () => void;
 }
 
@@ -60,11 +62,14 @@ export class RpcDaemon {
     private reconnectAttempt = 0;
 
     private watchdogTimer: NodeJS.Timeout | null = null;
+    private subagentReaperTimer: NodeJS.Timeout | null = null;
     private lastSentSignature: string | undefined = undefined;
 
     constructor(config: PluginConfig = DEFAULT_CONFIG, options: DaemonOptions = {}) {
         this.config = config;
-        this.stateMachine = new PresenceStateMachine(this.config);
+        this.stateMachine = new PresenceStateMachine(this.config, {
+            subagentTtlMs: options.subagentTtlMs
+        });
         this.ipcServer = new IpcServer(options.ipcPath);
         this.throttleMs = options.throttleMs ?? 2000;
         this.reconnectBaseMs = options.reconnectBaseMs ?? 2000;
@@ -268,6 +273,7 @@ export class RpcDaemon {
         this.clearReconnectTimer();
         this.clearIdleTimer();
         this.clearThrottleTimer();
+        this.clearSubagentReaperTimer();
 
         if (this._isConnected && this.rpcClient.user?.clearActivity) {
             try {
@@ -291,6 +297,15 @@ export class RpcDaemon {
         await this.ipcServer.stop();
     }
 
+    private syncLifecycleTimers(status: PresenceStatus): void {
+        if (status === PresenceStatus.WAITING_REVIEW) {
+            this.resetIdleTimer();
+        } else if (status === PresenceStatus.STOPPED) {
+            this.clearIdleTimer();
+        }
+        this.resetWatchdogTimer(status);
+    }
+
     /**
      * Applies an incoming Antigravity lifecycle hook event to internal state and watchdog timers.
      */
@@ -301,15 +316,9 @@ export class RpcDaemon {
         }
 
         const activity = await this.stateMachine.handleHook(payload);
-
         const currentStatus = this.stateMachine.getCurrentStatus();
-        if (currentStatus === PresenceStatus.WAITING_REVIEW) {
-            this.resetIdleTimer();
-        } else if (currentStatus === PresenceStatus.STOPPED) {
-            this.clearIdleTimer();
-        }
-
-        this.resetWatchdogTimer(currentStatus);
+        this.syncLifecycleTimers(currentStatus);
+        this.resetSubagentReaperTimer();
         return activity;
     }
 
@@ -332,7 +341,8 @@ export class RpcDaemon {
             largeImageText: activity.largeImageText,
             smallImageKey: activity.smallImageKey,
             smallImageText: activity.smallImageText,
-            buttons: activity.buttons
+            buttons: activity.buttons,
+            party: activity.party
         });
     }
 
@@ -397,6 +407,12 @@ export class RpcDaemon {
 
                 if (activity.buttons && activity.buttons.length > 0) {
                     presencePayload.buttons = activity.buttons;
+                }
+
+                if (activity.party) {
+                    presencePayload.partyId = activity.party.id;
+                    presencePayload.partySize = activity.party.size[0];
+                    presencePayload.partyMax = activity.party.size[1];
                 }
 
                 await this.rpcClient.user.setActivity(presencePayload);
@@ -473,6 +489,41 @@ export class RpcDaemon {
         }
         this.pendingActivity = undefined;
     }
+
+    private clearSubagentReaperTimer(): void {
+        if (this.subagentReaperTimer) {
+            clearTimeout(this.subagentReaperTimer);
+            this.subagentReaperTimer = null;
+        }
+    }
+
+    private resetSubagentReaperTimer(): void {
+        this.clearSubagentReaperTimer();
+        if (this.isStopping) return;
+
+        const nextExpiryMs = this.stateMachine.getNextSubagentExpiryMs();
+        if (nextExpiryMs === null) return;
+
+        const delay = Math.min(nextExpiryMs, 2_147_483_647);
+
+        this.subagentReaperTimer = setTimeout(() => {
+            this.subagentReaperTimer = null;
+            if (this.isStopping) return;
+
+            try {
+                const { prunedCount, status, activity } = this.stateMachine.reapStaleSubagents();
+                if (prunedCount > 0) {
+                    this.syncLifecycleTimers(status);
+                    this.schedulePresenceUpdate(activity);
+                }
+            } catch {
+                // ignore
+            } finally {
+                this.resetSubagentReaperTimer();
+            }
+        }, delay);
+        this.subagentReaperTimer.unref();
+    }
 }
 
 // Standalone entry execution support when launched directly
@@ -485,6 +536,7 @@ const isDirectRun = Boolean(
 if (isDirectRun) {
     const daemon = new RpcDaemon(loadConfigFromEnv(), {
         watchdogMs: loadWatchdogTimeoutMsFromEnv(),
+        subagentTtlMs: loadSubagentTtlMsFromEnv(),
         onWatchdogExit: () => process.exit(0)
     });
     daemon.start().catch((err) => {
