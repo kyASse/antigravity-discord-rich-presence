@@ -6935,7 +6935,7 @@ var require_IPC = __commonJS({
         }
       }
     ];
-    var createSocket = async (path4) => {
+    var createSocket = async (path5) => {
       return new Promise((resolve, reject) => {
         const onError = () => {
           socket.removeListener("connect", onConnect);
@@ -6946,10 +6946,10 @@ var require_IPC = __commonJS({
           resolve(socket);
         };
         let socket;
-        if (typeof path4 === "string")
-          socket = node_net_1.default.createConnection(path4);
+        if (typeof path5 === "string")
+          socket = node_net_1.default.createConnection(path5);
         else
-          socket = node_net_1.default.createConnection(path4[0], path4[1]);
+          socket = node_net_1.default.createConnection(path5[0], path5[1]);
         socket.once("connect", onConnect);
         socket.once("error", onError);
       });
@@ -7030,8 +7030,8 @@ var require_IPC = __commonJS({
 ${useablePath.map((x) => Array.isArray(x) ? `${x[1]}:${x[0]}` : x).join("\n")}`);
           if (useablePath.length === 0)
             return reject(new RPCError_1.RPCError(Transport_1.CUSTOM_RPC_ERROR_CODE.COULD_NOT_FIND_CLIENT, "Unable to find any Discord client"));
-          for (const path4 of useablePath) {
-            const socket = await createSocket(path4).catch(() => void 0);
+          for (const path5 of useablePath) {
+            const socket = await createSocket(path5).catch(() => void 0);
             if (socket)
               return resolve(socket);
           }
@@ -8064,13 +8064,13 @@ var require_ClientUser = __commonJS({
       async openGiftCodeBrowser(code) {
         return (await this.client.request("GIFT_CODE_BROWSER", { code })).data;
       }
-      async brainTreePopupBridgeCallback(state, path4, query) {
-        return (await this.client.request("BRAINTREE_POPUP_BRIDGE_CALLBACK", { state, path: path4, query })).data;
+      async brainTreePopupBridgeCallback(state, path5, query) {
+        return (await this.client.request("BRAINTREE_POPUP_BRIDGE_CALLBACK", { state, path: path5, query })).data;
       }
-      async billingPopupBridgeCallback(state, path4, query, paymentSourceType) {
+      async billingPopupBridgeCallback(state, path5, query, paymentSourceType) {
         return (await this.client.request("BILLING_POPUP_BRIDGE_CALLBACK", {
           state,
-          path: path4,
+          path: path5,
           query,
           payment_source_type: paymentSourceType
         })).data;
@@ -9066,14 +9066,14 @@ var require_util = __commonJS({
         }
         const port = url.port != null ? url.port : url.protocol === "https:" ? 443 : 80;
         let origin = url.origin != null ? url.origin : `${url.protocol || ""}//${url.hostname || ""}:${port}`;
-        let path4 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
+        let path5 = url.path != null ? url.path : `${url.pathname || ""}${url.search || ""}`;
         if (origin[origin.length - 1] === "/") {
           origin = origin.slice(0, origin.length - 1);
         }
-        if (path4 && path4[0] !== "/") {
-          path4 = `/${path4}`;
+        if (path5 && path5[0] !== "/") {
+          path5 = `/${path5}`;
         }
-        return new URL(`${origin}${path4}`);
+        return new URL(`${origin}${path5}`);
       }
       if (!isHttpOrHttpsPrefixed(url.origin || url.protocol)) {
         throw new InvalidArgumentError("Invalid URL protocol: the URL must start with `http:` or `https:`.");
@@ -9524,39 +9524,39 @@ var require_diagnostics = __commonJS({
       });
       diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
         const {
-          request: { method, path: path4, origin }
+          request: { method, path: path5, origin }
         } = evt;
-        debuglog("sending request to %s %s/%s", method, origin, path4);
+        debuglog("sending request to %s %s/%s", method, origin, path5);
       });
       diagnosticsChannel.channel("undici:request:headers").subscribe((evt) => {
         const {
-          request: { method, path: path4, origin },
+          request: { method, path: path5, origin },
           response: { statusCode }
         } = evt;
         debuglog(
           "received response to %s %s/%s - HTTP %d",
           method,
           origin,
-          path4,
+          path5,
           statusCode
         );
       });
       diagnosticsChannel.channel("undici:request:trailers").subscribe((evt) => {
         const {
-          request: { method, path: path4, origin }
+          request: { method, path: path5, origin }
         } = evt;
-        debuglog("trailers received from %s %s/%s", method, origin, path4);
+        debuglog("trailers received from %s %s/%s", method, origin, path5);
       });
       diagnosticsChannel.channel("undici:request:error").subscribe((evt) => {
         const {
-          request: { method, path: path4, origin },
+          request: { method, path: path5, origin },
           error
         } = evt;
         debuglog(
           "request to %s %s/%s errored - %s",
           method,
           origin,
-          path4,
+          path5,
           error.message
         );
       });
@@ -9605,9 +9605,9 @@ var require_diagnostics = __commonJS({
         });
         diagnosticsChannel.channel("undici:client:sendHeaders").subscribe((evt) => {
           const {
-            request: { method, path: path4, origin }
+            request: { method, path: path5, origin }
           } = evt;
-          debuglog("sending request to %s %s/%s", method, origin, path4);
+          debuglog("sending request to %s %s/%s", method, origin, path5);
         });
       }
       diagnosticsChannel.channel("undici:websocket:open").subscribe((evt) => {
@@ -9670,7 +9670,7 @@ var require_request = __commonJS({
     var kHandler = Symbol("handler");
     var Request = class {
       constructor(origin, {
-        path: path4,
+        path: path5,
         method,
         body,
         headers,
@@ -9685,11 +9685,11 @@ var require_request = __commonJS({
         expectContinue,
         servername
       }, handler) {
-        if (typeof path4 !== "string") {
+        if (typeof path5 !== "string") {
           throw new InvalidArgumentError("path must be a string");
-        } else if (path4[0] !== "/" && !(path4.startsWith("http://") || path4.startsWith("https://")) && method !== "CONNECT") {
+        } else if (path5[0] !== "/" && !(path5.startsWith("http://") || path5.startsWith("https://")) && method !== "CONNECT") {
           throw new InvalidArgumentError("path must be an absolute URL or start with a slash");
-        } else if (invalidPathRegex.test(path4)) {
+        } else if (invalidPathRegex.test(path5)) {
           throw new InvalidArgumentError("invalid request path");
         }
         if (typeof method !== "string") {
@@ -9755,7 +9755,7 @@ var require_request = __commonJS({
         this.completed = false;
         this.aborted = false;
         this.upgrade = upgrade || null;
-        this.path = query ? buildURL(path4, query) : path4;
+        this.path = query ? buildURL(path5, query) : path5;
         this.origin = origin;
         this.idempotent = idempotent == null ? method === "HEAD" || method === "GET" : idempotent;
         this.blocking = blocking == null ? false : blocking;
@@ -14448,7 +14448,7 @@ var require_client_h1 = __commonJS({
       return method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE" && method !== "CONNECT";
     }
     function writeH1(client, request) {
-      const { method, path: path4, host, upgrade, blocking, reset } = request;
+      const { method, path: path5, host, upgrade, blocking, reset } = request;
       let { body, headers, contentLength } = request;
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH" || method === "QUERY" || method === "PROPFIND" || method === "PROPPATCH";
       if (util.isFormDataLike(body)) {
@@ -14529,7 +14529,7 @@ var require_client_h1 = __commonJS({
       if (blocking) {
         socket[kBlocking] = true;
       }
-      let header = `${method} ${path4} HTTP/1.1\r
+      let header = `${method} ${path5} HTTP/1.1\r
 `;
       if (typeof host === "string") {
         header += `host: ${host}\r
@@ -15058,7 +15058,7 @@ var require_client_h2 = __commonJS({
     }
     function writeH2(client, request) {
       const session = client[kHTTP2Session];
-      const { method, path: path4, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
+      const { method, path: path5, host, upgrade, expectContinue, signal, headers: reqHeaders } = request;
       let { body } = request;
       if (upgrade) {
         util.errorRequest(client, request, new Error("Upgrade not supported for H2"));
@@ -15155,7 +15155,7 @@ var require_client_h2 = __commonJS({
         });
         return true;
       }
-      headers[HTTP2_HEADER_PATH] = path4;
+      headers[HTTP2_HEADER_PATH] = path5;
       headers[HTTP2_HEADER_SCHEME] = "https";
       const expectsPayload = method === "PUT" || method === "POST" || method === "PATCH";
       if (body && typeof body.read === "function") {
@@ -15508,9 +15508,9 @@ var require_redirect_handler = __commonJS({
           return this.handler.onHeaders(statusCode, headers, resume, statusText);
         }
         const { origin, pathname, search } = util.parseURL(new URL(this.location, this.opts.origin && new URL(this.opts.path, this.opts.origin)));
-        const path4 = search ? `${pathname}${search}` : pathname;
+        const path5 = search ? `${pathname}${search}` : pathname;
         this.opts.headers = cleanRequestHeaders(this.opts.headers, statusCode === 303, this.opts.origin !== origin);
-        this.opts.path = path4;
+        this.opts.path = path5;
         this.opts.origin = origin;
         this.opts.maxRedirections = 0;
         this.opts.query = null;
@@ -16749,10 +16749,10 @@ var require_proxy_agent = __commonJS({
         };
         const {
           origin,
-          path: path4 = "/",
+          path: path5 = "/",
           headers = {}
         } = opts;
-        opts.path = origin + path4;
+        opts.path = origin + path5;
         if (!("host" in headers) && !("Host" in headers)) {
           const { host } = new URL2(origin);
           headers.host = host;
@@ -18724,20 +18724,20 @@ var require_mock_utils = __commonJS({
       }
       return true;
     }
-    function safeUrl(path4) {
-      if (typeof path4 !== "string") {
-        return path4;
+    function safeUrl(path5) {
+      if (typeof path5 !== "string") {
+        return path5;
       }
-      const pathSegments = path4.split("?");
+      const pathSegments = path5.split("?");
       if (pathSegments.length !== 2) {
-        return path4;
+        return path5;
       }
       const qp = new URLSearchParams(pathSegments.pop());
       qp.sort();
       return [...pathSegments, qp.toString()].join("?");
     }
-    function matchKey(mockDispatch2, { path: path4, method, body, headers }) {
-      const pathMatch = matchValue(mockDispatch2.path, path4);
+    function matchKey(mockDispatch2, { path: path5, method, body, headers }) {
+      const pathMatch = matchValue(mockDispatch2.path, path5);
       const methodMatch = matchValue(mockDispatch2.method, method);
       const bodyMatch = typeof mockDispatch2.body !== "undefined" ? matchValue(mockDispatch2.body, body) : true;
       const headersMatch = matchHeaders(mockDispatch2, headers);
@@ -18759,7 +18759,7 @@ var require_mock_utils = __commonJS({
     function getMockDispatch(mockDispatches, key) {
       const basePath = key.query ? buildURL(key.path, key.query) : key.path;
       const resolvedPath = typeof basePath === "string" ? safeUrl(basePath) : basePath;
-      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path4 }) => matchValue(safeUrl(path4), resolvedPath));
+      let matchedMockDispatches = mockDispatches.filter(({ consumed }) => !consumed).filter(({ path: path5 }) => matchValue(safeUrl(path5), resolvedPath));
       if (matchedMockDispatches.length === 0) {
         throw new MockNotMatchedError(`Mock dispatch not matched for path '${resolvedPath}'`);
       }
@@ -18797,9 +18797,9 @@ var require_mock_utils = __commonJS({
       }
     }
     function buildKey(opts) {
-      const { path: path4, method, body, headers, query } = opts;
+      const { path: path5, method, body, headers, query } = opts;
       return {
-        path: path4,
+        path: path5,
         method,
         body,
         headers,
@@ -19262,10 +19262,10 @@ var require_pending_interceptors_formatter = __commonJS({
       }
       format(pendingInterceptors) {
         const withPrettyHeaders = pendingInterceptors.map(
-          ({ method, path: path4, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
+          ({ method, path: path5, data: { statusCode }, persist, times, timesInvoked, origin }) => ({
             Method: method,
             Origin: origin,
-            Path: path4,
+            Path: path5,
             "Status code": statusCode,
             Persistent: persist ? PERSISTENT : NOT_PERSISTENT,
             Invocations: timesInvoked,
@@ -24144,9 +24144,9 @@ var require_util6 = __commonJS({
         }
       }
     }
-    function validateCookiePath(path4) {
-      for (let i = 0; i < path4.length; ++i) {
-        const code = path4.charCodeAt(i);
+    function validateCookiePath(path5) {
+      for (let i = 0; i < path5.length; ++i) {
+        const code = path5.charCodeAt(i);
         if (code < 32 || // exclude CTLs (0-31)
         code > 126 || // exclude DEL and non-ascii
         code === 59) {
@@ -27066,11 +27066,11 @@ var require_undici = __commonJS({
           if (typeof opts.path !== "string") {
             throw new InvalidArgumentError("invalid opts.path");
           }
-          let path4 = opts.path;
+          let path5 = opts.path;
           if (!opts.path.startsWith("/")) {
-            path4 = `/${path4}`;
+            path5 = `/${path5}`;
           }
-          url = new URL(util.parseOrigin(url).origin + path4);
+          url = new URL(util.parseOrigin(url).origin + path5);
         } else {
           if (!opts) {
             opts = typeof url === "object" ? url : {};
@@ -27906,13 +27906,13 @@ var require_tree2 = __commonJS({
       mime: leaf.info.mime,
       extension: leaf.info.extension
     });
-    var isLeafNode = (tree, path4) => tree && path4.length === 0;
+    var isLeafNode = (tree, path5) => tree && path5.length === 0;
     var merge = (node, tree) => {
       if (node.bytes.length === 0)
         return tree;
-      const [currentByte, ...path4] = node.bytes;
+      const [currentByte, ...path5] = node.bytes;
       const currentTree = tree.bytes[currentByte];
-      if (isLeafNode(currentTree, path4)) {
+      if (isLeafNode(currentTree, path5)) {
         const matchingNode = tree.bytes[currentByte];
         tree.bytes[currentByte] = {
           ...matchingNode,
@@ -27924,9 +27924,9 @@ var require_tree2 = __commonJS({
         return tree;
       }
       if (tree.bytes[currentByte]) {
-        tree.bytes[currentByte] = exports.merge(exports.createNode(node.typename, path4, node.info), tree.bytes[currentByte]);
+        tree.bytes[currentByte] = exports.merge(exports.createNode(node.typename, path5, node.info), tree.bytes[currentByte]);
       } else {
-        tree.bytes[currentByte] = exports.createComplexNode(node.typename, path4, node.info);
+        tree.bytes[currentByte] = exports.createComplexNode(node.typename, path5, node.info);
       }
       return tree;
     };
@@ -27940,7 +27940,7 @@ var require_tree2 = __commonJS({
         bytes: {},
         matches: void 0
       };
-      const [currentKey, ...path4] = bytes;
+      const [currentKey, ...path5] = bytes;
       if (bytes.length === 0) {
         return {
           matches: [
@@ -27952,7 +27952,7 @@ var require_tree2 = __commonJS({
           bytes: {}
         };
       }
-      obj.bytes[currentKey] = exports.createComplexNode(typename, path4, info);
+      obj.bytes[currentKey] = exports.createComplexNode(typename, path5, info);
       return obj;
     };
     exports.createComplexNode = createComplexNode;
@@ -31365,67 +31365,33 @@ var require_dist6 = __commonJS({
 var import_discord_rpc = __toESM(require_dist6(), 1);
 
 // src/state.ts
-import path3 from "node:path";
+import path4 from "node:path";
 
 // src/types.ts
 var DEFAULT_CONFIG = {
   clientId: "1441771215290372156",
   privacyMode: false,
+  privacyProfile: "balanced",
   idleTimeoutSeconds: 300,
   showRepoButton: true
 };
-function parseBoolean(raw, fallback) {
-  if (raw === void 0) {
-    return fallback;
+function parsePrivacyProfile(raw) {
+  if (!raw || typeof raw !== "string") {
+    return void 0;
   }
-  const trimmed = raw.trim().toLowerCase();
-  if (trimmed === "true" || trimmed === "1") {
-    return true;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "stealth" || normalized === "balanced" || normalized === "showcase") {
+    return normalized;
   }
-  if (trimmed === "false" || trimmed === "0") {
-    return false;
-  }
-  return fallback;
+  return void 0;
 }
-function loadConfigFromEnv(env = process.env) {
-  let clientId = DEFAULT_CONFIG.clientId;
-  if (env.AGY_DISCORD_CLIENT_ID) {
-    const trimmed = env.AGY_DISCORD_CLIENT_ID.trim();
-    if (trimmed.length > 0) {
-      clientId = trimmed;
-    }
+function resolveEffectivePrivacyProfile(config) {
+  if (config.privacyMode === true) {
+    return "stealth";
   }
-  let idleTimeoutSeconds = DEFAULT_CONFIG.idleTimeoutSeconds;
-  if (env.AGY_DISCORD_IDLE_TIMEOUT) {
-    const parsed = Number.parseInt(env.AGY_DISCORD_IDLE_TIMEOUT.trim(), 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      idleTimeoutSeconds = parsed;
-    }
-  }
-  return {
-    clientId,
-    privacyMode: parseBoolean(env.AGY_DISCORD_PRIVACY_MODE, DEFAULT_CONFIG.privacyMode),
-    idleTimeoutSeconds,
-    showRepoButton: parseBoolean(env.AGY_DISCORD_SHOW_REPO_BUTTON, DEFAULT_CONFIG.showRepoButton)
-  };
+  return parsePrivacyProfile(config.privacyProfile) ?? DEFAULT_CONFIG.privacyProfile;
 }
 var DEFAULT_SUBAGENT_TTL_MS = 6e5;
-function parsePositiveSecondsMs(raw, fallbackMs) {
-  const trimmed = raw?.trim();
-  if (trimmed && /^\d+$/.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed * 1e3;
-    }
-  }
-  return fallbackMs;
-}
-function loadWatchdogTimeoutMsFromEnv(env = process.env) {
-  return parsePositiveSecondsMs(env.AGY_DISCORD_WATCHDOG_TIMEOUT, 18e5);
-}
-function loadSubagentTtlMsFromEnv(env = process.env) {
-  return parsePositiveSecondsMs(env.AGY_DISCORD_SUBAGENT_TTL, DEFAULT_SUBAGENT_TTL_MS);
-}
 function decodeInitialPayload(raw) {
   if (!raw || typeof raw !== "string") {
     return null;
@@ -31442,8 +31408,158 @@ function decodeInitialPayload(raw) {
   }
 }
 
-// src/sanitizer.ts
+// src/config.ts
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+var DEFAULT_WATCHDOG_TIMEOUT_MS = 18e5;
+function getGlobalConfigPath(homedir = os.homedir()) {
+  return path.join(homedir, ".gemini", "antigravity-discord-rpc.json");
+}
+function getWorkspaceConfigPath(cwd) {
+  return path.join(path.resolve(cwd), ".agents", "discord-rpc.json");
+}
+function normalizePrivacyLayer(target, rawProfile, rawPrivacyMode) {
+  const profile = typeof rawProfile === "string" ? parsePrivacyProfile(rawProfile) : void 0;
+  if (profile) {
+    target.privacyProfile = profile;
+    target.privacyMode = profile === "stealth";
+    return;
+  }
+  if (typeof rawPrivacyMode === "boolean") {
+    target.privacyMode = rawPrivacyMode;
+    target.privacyProfile = rawPrivacyMode ? "stealth" : "balanced";
+  }
+}
+function parseOptionalBoolean(raw) {
+  if (raw === void 0) {
+    return void 0;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "true" || trimmed === "1") {
+    return true;
+  }
+  if (trimmed === "false" || trimmed === "0") {
+    return false;
+  }
+  return void 0;
+}
+function parseOptionalPositiveInt(raw) {
+  const trimmed = raw?.trim();
+  if (trimmed && /^\d+$/.test(trimmed)) {
+    const parsed = Number.parseInt(trimmed, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return void 0;
+}
+function loadConfigFile(filePath) {
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {};
+    }
+    const data = parsed;
+    const overrides = {};
+    if (typeof data.clientId === "string" && data.clientId.trim().length > 0) {
+      overrides.clientId = data.clientId.trim();
+    }
+    normalizePrivacyLayer(overrides, data.privacyProfile, data.privacyMode);
+    if (typeof data.idleTimeoutSeconds === "number" && Number.isFinite(data.idleTimeoutSeconds) && data.idleTimeoutSeconds > 0) {
+      overrides.idleTimeoutSeconds = data.idleTimeoutSeconds;
+    }
+    if (typeof data.showRepoButton === "boolean") {
+      overrides.showRepoButton = data.showRepoButton;
+    }
+    if (typeof data.watchdogTimeoutSeconds === "number" && Number.isInteger(data.watchdogTimeoutSeconds) && data.watchdogTimeoutSeconds > 0) {
+      overrides.watchdogTimeoutSeconds = data.watchdogTimeoutSeconds;
+    }
+    if (typeof data.subagentTtlSeconds === "number" && Number.isInteger(data.subagentTtlSeconds) && data.subagentTtlSeconds > 0) {
+      overrides.subagentTtlSeconds = data.subagentTtlSeconds;
+    }
+    return overrides;
+  } catch {
+    return {};
+  }
+}
+function parseConfigOverridesFromEnv(env = process.env) {
+  const overrides = {};
+  if (env.AGY_DISCORD_CLIENT_ID) {
+    const trimmed = env.AGY_DISCORD_CLIENT_ID.trim();
+    if (trimmed.length > 0) {
+      overrides.clientId = trimmed;
+    }
+  }
+  const privacyMode = parseOptionalBoolean(env.AGY_DISCORD_PRIVACY_MODE);
+  normalizePrivacyLayer(overrides, env.AGY_DISCORD_PRIVACY_PROFILE, privacyMode);
+  const idleTimeoutSeconds = parseOptionalPositiveInt(env.AGY_DISCORD_IDLE_TIMEOUT);
+  if (idleTimeoutSeconds !== void 0) {
+    overrides.idleTimeoutSeconds = idleTimeoutSeconds;
+  }
+  const showRepoButton = parseOptionalBoolean(env.AGY_DISCORD_SHOW_REPO_BUTTON);
+  if (showRepoButton !== void 0) {
+    overrides.showRepoButton = showRepoButton;
+  }
+  const watchdogTimeoutSeconds = parseOptionalPositiveInt(env.AGY_DISCORD_WATCHDOG_TIMEOUT);
+  if (watchdogTimeoutSeconds !== void 0) {
+    overrides.watchdogTimeoutSeconds = watchdogTimeoutSeconds;
+  }
+  const subagentTtlSeconds = parseOptionalPositiveInt(env.AGY_DISCORD_SUBAGENT_TTL);
+  if (subagentTtlSeconds !== void 0) {
+    overrides.subagentTtlSeconds = subagentTtlSeconds;
+  }
+  return overrides;
+}
+function toWorkspaceOverrides(overrides) {
+  const result = {};
+  if (overrides.privacyProfile !== void 0) {
+    result.privacyProfile = overrides.privacyProfile;
+  }
+  if (overrides.privacyMode !== void 0) {
+    result.privacyMode = overrides.privacyMode;
+  }
+  if (overrides.idleTimeoutSeconds !== void 0) {
+    result.idleTimeoutSeconds = overrides.idleTimeoutSeconds;
+  }
+  if (overrides.showRepoButton !== void 0) {
+    result.showRepoButton = overrides.showRepoButton;
+  }
+  return result;
+}
+function toPluginOverrides(overrides) {
+  const result = toWorkspaceOverrides(overrides);
+  if (overrides.clientId !== void 0) {
+    result.clientId = overrides.clientId;
+  }
+  return result;
+}
+function loadDaemonConfig(options = {}) {
+  const env = options.env ?? process.env;
+  const globalPath = options.globalConfigPath ?? getGlobalConfigPath();
+  const globalRaw = loadConfigFile(globalPath);
+  const envRaw = parseConfigOverridesFromEnv(env);
+  const globalConfig = toPluginOverrides(globalRaw);
+  const envOverrides = toPluginOverrides(envRaw);
+  const config = {
+    ...DEFAULT_CONFIG,
+    ...globalConfig,
+    ...envOverrides
+  };
+  const watchdogSeconds = envRaw.watchdogTimeoutSeconds ?? globalRaw.watchdogTimeoutSeconds;
+  const subagentTtlSeconds = envRaw.subagentTtlSeconds ?? globalRaw.subagentTtlSeconds;
+  return {
+    config,
+    globalConfig,
+    envOverrides,
+    watchdogMs: watchdogSeconds !== void 0 ? watchdogSeconds * 1e3 : DEFAULT_WATCHDOG_TIMEOUT_MS,
+    subagentTtlMs: subagentTtlSeconds !== void 0 ? subagentTtlSeconds * 1e3 : DEFAULT_SUBAGENT_TTL_MS
+  };
+}
+
+// src/sanitizer.ts
+import path2 from "node:path";
 function sanitizeGitUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== "string") {
     return void 0;
@@ -31496,7 +31612,7 @@ function sanitizeCommand(command, privacyMode = false) {
     } else {
       firstToken = trimmed.split(/\s+/)[0];
     }
-    const base = path.basename(firstToken.replace(/\\/g, "/"));
+    const base = path2.basename(firstToken.replace(/\\/g, "/"));
     return base.replace(/\.(exe|cmd|bat)$/i, "") || firstToken;
   }
   let sanitized = command;
@@ -31514,29 +31630,84 @@ function sanitizeCommand(command, privacyMode = false) {
   sanitized = sanitized.replace(/\bglpat-[A-Za-z0-9_-]{20,}\b/g, "***");
   return sanitized;
 }
-function mapToolToAction(toolName, args, privacyMode = false) {
+var SENSITIVE_DOTFILES = /* @__PURE__ */ new Set([
+  ".npmrc",
+  ".pypirc",
+  ".netrc",
+  ".htpasswd",
+  ".pgpass"
+]);
+function isSensitiveFilename(filePath) {
+  if (!filePath || typeof filePath !== "string") {
+    return false;
+  }
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const base = path2.basename(trimmed.replace(/\\/g, "/")).toLowerCase();
+  if (!base) {
+    return false;
+  }
+  if (/^\.env(\.|$)/i.test(base)) {
+    return true;
+  }
+  if (/\.(pem|key|p12|pfx|jks|keystore|ppk)$/i.test(base)) {
+    return true;
+  }
+  if (/^id_(rsa|ed25519|ecdsa|dsa)(?:\.(?!pub$).*)?$/i.test(base)) {
+    return true;
+  }
+  if (SENSITIVE_DOTFILES.has(base)) {
+    return true;
+  }
+  if (base.includes("secret") || base.includes("credential")) {
+    return true;
+  }
+  if (/^service[-_]?account.*\.json$/i.test(base)) {
+    return true;
+  }
+  return false;
+}
+function mapToolToAction(toolName, args, privacy = false) {
   if (!toolName) {
     return "Executing tool";
   }
-  const getFilePath = () => {
+  const mode = privacy === true ? "stealth" : privacy === false ? "showcase" : privacy;
+  const getRawFilePath = () => {
     const raw = args?.Path ?? args?.path ?? args?.filePath ?? args?.file_path;
     if (typeof raw === "string" && raw.trim().length > 0) {
-      return path.basename(raw.trim().replace(/\\/g, "/"));
+      return raw.trim();
     }
     return void 0;
   };
+  const getDisplayFilename = () => {
+    const raw = getRawFilePath();
+    if (!raw) {
+      return { sensitive: false };
+    }
+    if (isSensitiveFilename(raw)) {
+      return { sensitive: true };
+    }
+    return {
+      filename: path2.basename(raw.replace(/\\/g, "/")),
+      sensitive: false
+    };
+  };
   switch (toolName) {
     case "read_file": {
-      const file = getFilePath();
-      return file ? `Reading ${file}` : "Reading file";
+      const { filename, sensitive } = getDisplayFilename();
+      if (sensitive) return "Reading sensitive file";
+      return filename ? `Reading ${filename}` : "Reading file";
     }
     case "write_file":
     case "edit_file": {
-      const file = getFilePath();
-      return file ? `Editing ${file}` : "Editing file";
+      const { filename, sensitive } = getDisplayFilename();
+      if (sensitive) return "Editing sensitive file";
+      return filename ? `Editing ${filename}` : "Editing file";
     }
     case "run_command": {
-      if (privacyMode) {
+      if (mode === "stealth" || mode === "balanced") {
         if (args?.CommandLine && typeof args.CommandLine === "string" && args.CommandLine.trim().length > 0) {
           const cmd = sanitizeCommand(args.CommandLine, true);
           return cmd ? `Running: ${cmd}` : "Running command";
@@ -31615,7 +31786,7 @@ function validateRpcButtonUrl(rawUrl) {
 
 // src/git.ts
 import { execFile } from "node:child_process";
-import path2 from "node:path";
+import path3 from "node:path";
 var DEFAULT_GIT_TIMEOUT_MS = 500;
 function execGit(args, cwd, timeoutMs = DEFAULT_GIT_TIMEOUT_MS) {
   return new Promise((resolve) => {
@@ -31684,7 +31855,7 @@ async function getGitInfo(dirPath) {
     }
     if (!info.repoName && topLevelRaw) {
       const normalized = topLevelRaw.replace(/\\/g, "/");
-      const base = path2.basename(normalized);
+      const base = path3.basename(normalized);
       if (base) {
         info.repoName = base;
       }
@@ -31698,7 +31869,7 @@ async function getGitInfo(dirPath) {
 // src/state.ts
 var DEFAULT_WORKSPACE_KEY = "__default__";
 function normalizeWorkspaceKey(cwd) {
-  const resolved = path3.resolve(cwd);
+  const resolved = path4.resolve(cwd);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 var STATUS_PRIORITY = {
@@ -31710,6 +31881,10 @@ var STATUS_PRIORITY = {
 };
 var PresenceStateMachine = class {
   config;
+  baseConfig;
+  envOverrides;
+  enableWorkspaceConfig;
+  configCacheTtlMs;
   subagentTtlMs;
   now;
   sessions = /* @__PURE__ */ new Map();
@@ -31717,7 +31892,11 @@ var PresenceStateMachine = class {
   largeImageKey = "antigravity";
   largeImageText = "Antigravity";
   constructor(config = DEFAULT_CONFIG, options = {}) {
-    this.config = config;
+    this.baseConfig = options.globalConfig ? { ...DEFAULT_CONFIG, ...options.globalConfig } : config;
+    this.envOverrides = options.env ? toWorkspaceOverrides(parseConfigOverridesFromEnv(options.env)) : {};
+    this.config = options.globalConfig || options.env ? { ...this.baseConfig, ...this.envOverrides } : config;
+    this.enableWorkspaceConfig = options.enableWorkspaceConfig ?? true;
+    this.configCacheTtlMs = options.configCacheTtlMs ?? 5e3;
     this.subagentTtlMs = options.subagentTtlMs ?? DEFAULT_SUBAGENT_TTL_MS;
     this.now = options.now ?? (() => Date.now());
   }
@@ -31863,7 +32042,7 @@ var PresenceStateMachine = class {
     let resolvedCwd;
     let targetWorkspaceKey;
     if (trimmedCwd) {
-      resolvedCwd = path3.resolve(trimmedCwd);
+      resolvedCwd = path4.resolve(trimmedCwd);
       targetWorkspaceKey = normalizeWorkspaceKey(resolvedCwd);
     } else if (session) {
       targetWorkspaceKey = session.workspaceKey;
@@ -31876,6 +32055,7 @@ var PresenceStateMachine = class {
         key: targetWorkspaceKey,
         cwd: resolvedCwd ?? process.cwd(),
         lastGitFetchTime: 0,
+        lastConfigFetchTime: 0,
         peakActiveAgents: 0,
         updatedAt: now
       };
@@ -32057,12 +32237,36 @@ var PresenceStateMachine = class {
     this.pruneStaleSubagents(this.now());
     return this.buildActivity();
   }
+  getEffectiveConfig(workspace, now = this.now()) {
+    if (this.enableWorkspaceConfig && workspace.key !== DEFAULT_WORKSPACE_KEY && (workspace.workspaceOverrides === void 0 || now - workspace.lastConfigFetchTime > this.configCacheTtlMs)) {
+      workspace.workspaceOverrides = toWorkspaceOverrides(
+        loadConfigFile(getWorkspaceConfigPath(workspace.cwd))
+      );
+      workspace.lastConfigFetchTime = now;
+    }
+    return {
+      ...this.baseConfig,
+      ...workspace.workspaceOverrides ?? {},
+      ...this.envOverrides
+    };
+  }
+  /**
+   * Returns the effective idleTimeoutSeconds for the currently winning workspace,
+   * falling back to the daemon/base config idleTimeoutSeconds.
+   */
+  getActiveIdleTimeoutSeconds() {
+    const winning = this.getWinningWorkspace();
+    if (!winning) {
+      return this.config.idleTimeoutSeconds;
+    }
+    return this.getEffectiveConfig(winning.workspace).idleTimeoutSeconds;
+  }
   /**
    * Formats repository action buttons for Discord Rich Presence.
    * Enforces valid HTTP/HTTPS URL, max 512 URL length, max 32 label length, max 2 buttons.
    */
-  getButtons(workspace) {
-    if (this.config.showRepoButton && !this.config.privacyMode && workspace.gitInfo?.remoteUrl) {
+  getButtons(workspace, effectiveConfig, profile) {
+    if (effectiveConfig.showRepoButton && profile !== "stealth" && workspace.gitInfo?.remoteUrl) {
       const validUrl = validateRpcButtonUrl(workspace.gitInfo.remoteUrl);
       const validLabel = truncateRpcText("View Repository", 32);
       if (validUrl && validLabel) {
@@ -32077,7 +32281,7 @@ var PresenceStateMachine = class {
    * Truncates output to Discord's 128 character limit.
    */
   formatState(workspace, status) {
-    const repoName = workspace.gitInfo?.repoName || (workspace.cwd ? path3.basename(workspace.cwd) : void 0);
+    const repoName = workspace.gitInfo?.repoName || (workspace.cwd ? path4.basename(workspace.cwd) : void 0);
     const branch = workspace.gitInfo?.branch;
     let rawState;
     if (status === "IDLE" /* IDLE */) {
@@ -32134,6 +32338,20 @@ var PresenceStateMachine = class {
     if (!workspace.startTimestamp) {
       workspace.startTimestamp = this.now();
     }
+    const effectiveConfig = this.getEffectiveConfig(workspace);
+    const profile = resolveEffectivePrivacyProfile(effectiveConfig);
+    if (profile === "stealth") {
+      if (status === "STOPPED" /* STOPPED */) {
+        return null;
+      }
+      workspace.peakActiveAgents = 0;
+      return {
+        details: "Working in Antigravity",
+        startTimestamp: workspace.startTimestamp,
+        largeImageKey: this.largeImageKey,
+        largeImageText: truncateRpcText(this.largeImageText, 128)
+      };
+    }
     let details;
     let smallImageKey;
     let smallImageText;
@@ -32151,7 +32369,7 @@ var PresenceStateMachine = class {
         const action = mapToolToAction(
           activeSession?.toolName || "",
           activeSession?.toolArgs,
-          this.config.privacyMode
+          profile
         );
         const isExecutingSubagent = activeSession?.isSubagent ?? false;
         const subSuffix = !isExecutingSubagent && subCount > 0 || isExecutingSubagent && subCount > 1 ? ` (${subCount} subagent${subCount > 1 ? "s" : ""} active)` : "";
@@ -32186,7 +32404,7 @@ var PresenceStateMachine = class {
       largeImageText: truncateRpcText(this.largeImageText, 128),
       smallImageKey,
       smallImageText: truncateRpcText(smallImageText, 128),
-      buttons: this.getButtons(workspace)
+      buttons: this.getButtons(workspace, effectiveConfig, profile)
     };
     if (party) {
       activity.party = party;
@@ -32197,7 +32415,7 @@ var PresenceStateMachine = class {
 
 // src/ipc.ts
 import net from "node:net";
-import fs from "node:fs";
+import fs2 from "node:fs";
 function getIpcAddress() {
   if (process.env.AGY_IPC_PATH) {
     return process.env.AGY_IPC_PATH;
@@ -32224,7 +32442,7 @@ var IpcServer = class {
    */
   async start() {
     if (this._isListening) return;
-    if (process.platform !== "win32" && fs.existsSync(this.path)) {
+    if (process.platform !== "win32" && fs2.existsSync(this.path)) {
       const active = await probeSocketActive(this.path, 50);
       if (active) {
         const err = new Error(`EADDRINUSE: address already in use ${this.path}`);
@@ -32232,7 +32450,7 @@ var IpcServer = class {
         throw err;
       }
       try {
-        fs.unlinkSync(this.path);
+        fs2.unlinkSync(this.path);
       } catch {
       }
     }
@@ -32297,9 +32515,9 @@ var IpcServer = class {
       this.server.close(() => {
         this._isListening = false;
         this.server = null;
-        if (process.platform !== "win32" && fs.existsSync(this.path)) {
+        if (process.platform !== "win32" && fs2.existsSync(this.path)) {
           try {
-            fs.unlinkSync(this.path);
+            fs2.unlinkSync(this.path);
           } catch {
           }
         }
@@ -32373,7 +32591,10 @@ var RpcDaemon = class {
   constructor(config = DEFAULT_CONFIG, options = {}) {
     this.config = config;
     this.stateMachine = new PresenceStateMachine(this.config, {
-      subagentTtlMs: options.subagentTtlMs
+      subagentTtlMs: options.subagentTtlMs,
+      env: options.env,
+      globalConfig: options.globalConfig,
+      enableWorkspaceConfig: options.enableWorkspaceConfig
     });
     this.ipcServer = new IpcServer(options.ipcPath);
     this.throttleMs = options.throttleMs ?? 2e3;
@@ -32706,7 +32927,8 @@ var RpcDaemon = class {
   }
   resetIdleTimer() {
     this.clearIdleTimer();
-    const ms = Math.max(10, (this.config.idleTimeoutSeconds ?? 300) * 1e3);
+    const timeoutSeconds = this.stateMachine.getActiveIdleTimeoutSeconds();
+    const ms = Math.max(10, (timeoutSeconds ?? 300) * 1e3);
     this.idleTimer = setTimeout(() => {
       try {
         const idleActivity = this.stateMachine.handleIdleTimeout();
@@ -32765,9 +32987,12 @@ var isDirectRun = Boolean(
   process.argv[1] && (process.argv[1].endsWith("daemon.js") || process.argv[1].endsWith("daemon.ts")) && !process.argv[1].includes("test")
 );
 if (isDirectRun) {
-  const daemon = new RpcDaemon(loadConfigFromEnv(), {
-    watchdogMs: loadWatchdogTimeoutMsFromEnv(),
-    subagentTtlMs: loadSubagentTtlMsFromEnv(),
+  const loaded = loadDaemonConfig();
+  const daemon = new RpcDaemon(loaded.config, {
+    watchdogMs: loaded.watchdogMs,
+    subagentTtlMs: loaded.subagentTtlMs,
+    env: process.env,
+    globalConfig: loaded.globalConfig,
     onWatchdogExit: () => process.exit(0)
   });
   daemon.start().catch((err) => {
