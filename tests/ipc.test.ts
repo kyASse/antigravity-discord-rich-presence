@@ -537,8 +537,9 @@ describe("RPC Daemon Core", () => {
             await daemon.handlePayload({ event: "PreInvocation", conversationId: "sub-p1", isSubagent: true });
             await daemon.handlePayload({ event: "PreInvocation", conversationId: "sub-p2", isSubagent: true });
             await daemon.handlePayload({ event: "Stop", conversationId: "sub-p2", isSubagent: true, terminationReason: "NO_TOOL_CALL" });
+            await daemon.handlePayload({ event: "Stop", conversationId: "sub-p1", isSubagent: true, terminationReason: "NO_TOOL_CALL" });
 
-            assert.equal(setCalls.length, 4);
+            assert.equal(setCalls.length, 5);
             assert.equal(setCalls[0].partyId, undefined);
             assert.equal(setCalls[1].partyId, "root-p");
             assert.equal(setCalls[1].partySize, 2);
@@ -547,6 +548,7 @@ describe("RPC Daemon Core", () => {
             assert.equal(setCalls[2].partyMax, 3);
             assert.equal(setCalls[3].partySize, 2);
             assert.equal(setCalls[3].partyMax, 3);
+            assert.equal(setCalls[4].partyId, undefined);
         } finally {
             await daemon.stop();
         }
@@ -571,7 +573,7 @@ describe("RPC Daemon Core", () => {
         };
 
         const daemon = new RpcDaemon(
-            { ...DEFAULT_CONFIG, idleTimeoutSeconds: 0.05 },
+            { ...DEFAULT_CONFIG, idleTimeoutSeconds: 0.15 },
             {
                 ipcPath: testPipe,
                 throttleMs: 0,
@@ -593,8 +595,8 @@ describe("RPC Daemon Core", () => {
             assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
             assert.ok(setCalls.some((c) => c.details === "Waiting for user review"));
 
-            // Wait for idleTimer (50ms) armed after reaper recovery
-            await new Promise((r) => setTimeout(r, 80));
+            // Wait for idleTimer (150ms) armed after reaper recovery
+            await new Promise((r) => setTimeout(r, 170));
             assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.IDLE);
             assert.ok(setCalls.some((c) => c.details === "Idling in workspace"));
         } finally {

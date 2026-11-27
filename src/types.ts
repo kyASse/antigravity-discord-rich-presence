@@ -89,7 +89,7 @@ export const DEFAULT_SUBAGENT_TTL_MS = 600_000;
 
 function parsePositiveSecondsMs(raw: string | undefined, fallbackMs: number): number {
     const trimmed = raw?.trim();
-    if (trimmed) {
+    if (trimmed && /^\d+$/.test(trimmed)) {
         const parsed = Number.parseInt(trimmed, 10);
         if (Number.isFinite(parsed) && parsed > 0) {
             return parsed * 1000;

@@ -31412,7 +31412,7 @@ function loadConfigFromEnv(env = process.env) {
 var DEFAULT_SUBAGENT_TTL_MS = 6e5;
 function parsePositiveSecondsMs(raw, fallbackMs) {
   const trimmed = raw?.trim();
-  if (trimmed) {
+  if (trimmed && /^\d+$/.test(trimmed)) {
     const parsed = Number.parseInt(trimmed, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
       return parsed * 1e3;
@@ -31734,16 +31734,35 @@ var PresenceStateMachine = class {
     }
     return bestStatus;
   }
+  hasActiveNonSubagentSession(workspaceKey) {
+    for (const session of this.sessions.values()) {
+      if (session.workspaceKey === workspaceKey && !session.isSubagent && session.status !== "STOPPED" /* STOPPED */) {
+        return true;
+      }
+    }
+    return false;
+  }
   /**
    * Selects the active workspace with highest status precedence,
    * tie-broken by most recent workspace update timestamp.
+   * Skips DEFAULT_WORKSPACE_KEY when a non-default workspace is active and
+   * DEFAULT_WORKSPACE_KEY has no active primary (non-subagent) session.
    */
   getWinningWorkspace() {
+    let hasActiveNonDefault = false;
+    for (const workspace of this.workspaces.values()) {
+      if (workspace.key !== DEFAULT_WORKSPACE_KEY && this.getWorkspaceStatus(workspace.key) !== "STOPPED" /* STOPPED */) {
+        hasActiveNonDefault = true;
+        break;
+      }
+    }
+    const skipDefaultWorkspace = hasActiveNonDefault && !this.hasActiveNonSubagentSession(DEFAULT_WORKSPACE_KEY);
     let bestWorkspace = null;
     let bestStatus = "STOPPED" /* STOPPED */;
     let bestPriority = STATUS_PRIORITY["STOPPED" /* STOPPED */];
     let bestUpdatedAt = -1;
     for (const workspace of this.workspaces.values()) {
+      if (workspace.key === DEFAULT_WORKSPACE_KEY && skipDefaultWorkspace) continue;
       const status = this.getWorkspaceStatus(workspace.key);
       if (status === "STOPPED" /* STOPPED */) continue;
       const priority = STATUS_PRIORITY[status];
@@ -31874,6 +31893,11 @@ var PresenceStateMachine = class {
         workspace.gitInfo = {};
       }
       workspace.lastGitFetchTime = now;
+    }
+    session = this.sessions.get(convId);
+    if (!trimmedCwd && session) {
+      targetWorkspaceKey = session.workspaceKey;
+      workspace = this.workspaces.get(targetWorkspaceKey) ?? workspace;
     }
     if (!session) {
       session = {
@@ -32012,6 +32036,21 @@ var PresenceStateMachine = class {
     return latest;
   }
   /**
+   * Prunes stale subagents once and returns the prune count along with the resulting status and activity.
+   */
+  reapStaleSubagents() {
+    const prunedCount = this.pruneStaleSubagents(this.now());
+    const winning = this.getWinningWorkspace();
+    if (!winning) {
+      return { prunedCount, status: "STOPPED" /* STOPPED */, activity: null };
+    }
+    return {
+      prunedCount,
+      status: winning.status,
+      activity: this.buildActivity(winning)
+    };
+  }
+  /**
    * Returns the currently active PresenceActivity payload, or null if stopped.
    */
   getCurrentActivity() {
@@ -32087,8 +32126,7 @@ var PresenceStateMachine = class {
   /**
    * Constructs the full PresenceActivity payload for the winning workspace.
    */
-  buildActivity() {
-    const winning = this.getWinningWorkspace();
+  buildActivity(winning = this.getWinningWorkspace()) {
     if (!winning) {
       return null;
     }
@@ -32526,6 +32564,14 @@ var RpcDaemon = class {
     this.lastSentSignature = void 0;
     await this.ipcServer.stop();
   }
+  syncLifecycleTimers(status) {
+    if (status === "WAITING_REVIEW" /* WAITING_REVIEW */) {
+      this.resetIdleTimer();
+    } else if (status === "STOPPED" /* STOPPED */) {
+      this.clearIdleTimer();
+    }
+    this.resetWatchdogTimer(status);
+  }
   /**
    * Applies an incoming Antigravity lifecycle hook event to internal state and watchdog timers.
    */
@@ -32535,12 +32581,7 @@ var RpcDaemon = class {
     }
     const activity = await this.stateMachine.handleHook(payload);
     const currentStatus = this.stateMachine.getCurrentStatus();
-    if (currentStatus === "WAITING_REVIEW" /* WAITING_REVIEW */) {
-      this.resetIdleTimer();
-    } else if (currentStatus === "STOPPED" /* STOPPED */) {
-      this.clearIdleTimer();
-    }
-    this.resetWatchdogTimer(currentStatus);
+    this.syncLifecycleTimers(currentStatus);
     this.resetSubagentReaperTimer();
     return activity;
   }
@@ -32700,22 +32741,16 @@ var RpcDaemon = class {
   resetSubagentReaperTimer() {
     this.clearSubagentReaperTimer();
     if (this.isStopping) return;
-    const delay = this.stateMachine.getNextSubagentExpiryMs();
-    if (delay === null) return;
+    const nextExpiryMs = this.stateMachine.getNextSubagentExpiryMs();
+    if (nextExpiryMs === null) return;
+    const delay = Math.min(nextExpiryMs, 2147483647);
     this.subagentReaperTimer = setTimeout(() => {
       this.subagentReaperTimer = null;
       if (this.isStopping) return;
       try {
-        const pruned = this.stateMachine.pruneStaleSubagents();
-        if (pruned > 0) {
-          const activity = this.stateMachine.getCurrentActivity();
-          const currentStatus = this.stateMachine.getCurrentStatus();
-          if (currentStatus === "WAITING_REVIEW" /* WAITING_REVIEW */) {
-            this.resetIdleTimer();
-          } else if (currentStatus === "STOPPED" /* STOPPED */) {
-            this.clearIdleTimer();
-          }
-          this.resetWatchdogTimer(currentStatus);
+        const { prunedCount, status, activity } = this.stateMachine.reapStaleSubagents();
+        if (prunedCount > 0) {
+          this.syncLifecycleTimers(status);
           this.schedulePresenceUpdate(activity);
         }
       } catch {

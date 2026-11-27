@@ -55,6 +55,8 @@ describe("Types & Defaults", () => {
         assert.equal(loadWatchdogTimeoutMsFromEnv({}), 1_800_000);
         assert.equal(loadWatchdogTimeoutMsFromEnv({ AGY_DISCORD_WATCHDOG_TIMEOUT: "90" }), 90_000);
         assert.equal(loadWatchdogTimeoutMsFromEnv({ AGY_DISCORD_WATCHDOG_TIMEOUT: "abc" }), 1_800_000);
+        assert.equal(loadWatchdogTimeoutMsFromEnv({ AGY_DISCORD_WATCHDOG_TIMEOUT: "10ms" }), 1_800_000);
+        assert.equal(loadWatchdogTimeoutMsFromEnv({ AGY_DISCORD_WATCHDOG_TIMEOUT: "10abc" }), 1_800_000);
 
         // Verify default process.env usage
         const defaultFromProcessEnv = loadConfigFromEnv();
@@ -79,6 +81,8 @@ describe("Types & Defaults", () => {
         assert.equal(loadSubagentTtlMsFromEnv({ AGY_DISCORD_SUBAGENT_TTL: "0" }), 600_000);
         assert.equal(loadSubagentTtlMsFromEnv({ AGY_DISCORD_SUBAGENT_TTL: "-10" }), 600_000);
         assert.equal(loadSubagentTtlMsFromEnv({ AGY_DISCORD_SUBAGENT_TTL: "invalid" }), 600_000);
+        assert.equal(loadSubagentTtlMsFromEnv({ AGY_DISCORD_SUBAGENT_TTL: "10ms" }), 600_000);
+        assert.equal(loadSubagentTtlMsFromEnv({ AGY_DISCORD_SUBAGENT_TTL: "10abc" }), 600_000);
 
         const activity: PresenceActivity = {
             details: "Agent is thinking...",

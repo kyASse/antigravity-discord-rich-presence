@@ -86,17 +86,48 @@ export class PresenceStateMachine {
         return bestStatus;
     }
 
+    private hasActiveNonSubagentSession(workspaceKey: string): boolean {
+        for (const session of this.sessions.values()) {
+            if (
+                session.workspaceKey === workspaceKey &&
+                !session.isSubagent &&
+                session.status !== PresenceStatus.STOPPED
+            ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Selects the active workspace with highest status precedence,
      * tie-broken by most recent workspace update timestamp.
+     * Skips DEFAULT_WORKSPACE_KEY when a non-default workspace is active and
+     * DEFAULT_WORKSPACE_KEY has no active primary (non-subagent) session.
      */
     private getWinningWorkspace(): { workspace: WorkspaceContext; status: PresenceStatus } | null {
+        let hasActiveNonDefault = false;
+        for (const workspace of this.workspaces.values()) {
+            if (
+                workspace.key !== DEFAULT_WORKSPACE_KEY &&
+                this.getWorkspaceStatus(workspace.key) !== PresenceStatus.STOPPED
+            ) {
+                hasActiveNonDefault = true;
+                break;
+            }
+        }
+
+        const skipDefaultWorkspace =
+            hasActiveNonDefault && !this.hasActiveNonSubagentSession(DEFAULT_WORKSPACE_KEY);
+
         let bestWorkspace: WorkspaceContext | null = null;
         let bestStatus = PresenceStatus.STOPPED;
         let bestPriority = STATUS_PRIORITY[PresenceStatus.STOPPED];
         let bestUpdatedAt = -1;
 
         for (const workspace of this.workspaces.values()) {
+            if (workspace.key === DEFAULT_WORKSPACE_KEY && skipDefaultWorkspace) continue;
+
             const status = this.getWorkspaceStatus(workspace.key);
             if (status === PresenceStatus.STOPPED) continue;
 
@@ -264,6 +295,11 @@ export class PresenceStateMachine {
             workspace.lastGitFetchTime = now;
         }
 
+        session = this.sessions.get(convId);
+        if (!trimmedCwd && session) {
+            targetWorkspaceKey = session.workspaceKey;
+            workspace = this.workspaces.get(targetWorkspaceKey) ?? workspace;
+        }
         if (!session) {
             session = {
                 conversationId: convId,
@@ -432,6 +468,26 @@ export class PresenceStateMachine {
     }
 
     /**
+     * Prunes stale subagents once and returns the prune count along with the resulting status and activity.
+     */
+    public reapStaleSubagents(): {
+        prunedCount: number;
+        status: PresenceStatus;
+        activity: PresenceActivity | null;
+    } {
+        const prunedCount = this.pruneStaleSubagents(this.now());
+        const winning = this.getWinningWorkspace();
+        if (!winning) {
+            return { prunedCount, status: PresenceStatus.STOPPED, activity: null };
+        }
+        return {
+            prunedCount,
+            status: winning.status,
+            activity: this.buildActivity(winning)
+        };
+    }
+
+    /**
      * Returns the currently active PresenceActivity payload, or null if stopped.
      */
     public getCurrentActivity(): PresenceActivity | null {
@@ -527,8 +583,9 @@ export class PresenceStateMachine {
     /**
      * Constructs the full PresenceActivity payload for the winning workspace.
      */
-    private buildActivity(): PresenceActivity | null {
-        const winning = this.getWinningWorkspace();
+    private buildActivity(
+        winning: { workspace: WorkspaceContext; status: PresenceStatus } | null = this.getWinningWorkspace()
+    ): PresenceActivity | null {
         if (!winning) {
             return null;
         }

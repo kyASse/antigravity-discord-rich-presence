@@ -310,7 +310,7 @@ describe("Presence State Machine", () => {
         assert.equal(sm.getCurrentActivity()?.details, "Waiting for user review");
     });
 
-    it("refreshes subagent TTL on activity and returns STOPPED when only orphaned subagent existed", async () => {
+    it("refreshes subagent TTL on activity, returns STOPPED when only orphaned subagent existed, and resets startTimestamp on new session", async () => {
         let fakeNow = 20_000;
         const sm = new PresenceStateMachine(DEFAULT_CONFIG, {
             subagentTtlMs: 5_000,
@@ -328,17 +328,25 @@ describe("Presence State Machine", () => {
         fakeNow = 29_000; // 5s since last update (>= 5s TTL)
         assert.equal(sm.getCurrentStatus(), PresenceStatus.STOPPED);
         assert.equal(sm.getCurrentActivity(), null);
+
+        // New session after orphaned subagents expired gets a fresh startTimestamp
+        fakeNow = 50_000;
+        const fresh = await sm.handleHook({ event: "PreInvocation", conversationId: "fresh-root" });
+        assert.equal(fresh?.startTimestamp, 50_000);
     });
 
-    it("populates Discord RPC party metrics during active subagent swarms and clears when subagents end", async () => {
-        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+    it("populates Discord RPC party metrics during active subagent swarms, clears when subagents end, and resets peak across consecutive swarms", async () => {
+        let fakeNow = 10_000;
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
 
         // Primary agent alone: no party
         const solo = await sm.handleHook({ event: "PreInvocation", conversationId: "root-swarm" });
         assert.equal(solo?.party, undefined);
 
         // 2 subagents join -> 3 active agents of peak 3
+        fakeNow = 10_100;
         await sm.handleHook({ event: "PreInvocation", conversationId: "sub-1", isSubagent: true });
+        fakeNow = 10_200;
         const swarm3 = await sm.handleHook({
             event: "PreToolUse",
             conversationId: "sub-2",
@@ -348,6 +356,7 @@ describe("Presence State Machine", () => {
         assert.deepEqual(swarm3?.party, { id: "root-swarm", size: [3, 3] });
 
         // 1 subagent completes -> 2 active of peak 3
+        fakeNow = 10_300;
         const swarm2 = await sm.handleHook({
             event: "Stop",
             conversationId: "sub-2",
@@ -357,6 +366,7 @@ describe("Presence State Machine", () => {
         assert.deepEqual(swarm2?.party, { id: "root-swarm", size: [2, 3] });
 
         // Last subagent completes -> party cleared
+        fakeNow = 10_400;
         const backToSolo = await sm.handleHook({
             event: "Stop",
             conversationId: "sub-1",
@@ -364,6 +374,66 @@ describe("Presence State Machine", () => {
             terminationReason: "NO_TOOL_CALL"
         });
         assert.equal(backToSolo?.party, undefined);
+
+        // Consecutive swarm resets peakActiveAgents back to [2, 2]
+        fakeNow = 10_500;
+        const nextSwarm = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-3", isSubagent: true });
+        assert.deepEqual(nextSwarm?.party, { id: "root-swarm", size: [2, 2] });
+    });
+
+    it("falls back to antigravity-swarm party.id when no non-subagent primary session exists in the winning workspace", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-sub-only-"));
+        try {
+            let fakeNow = 30_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "sub-only-1", isSubagent: true, cwd: dirA });
+            fakeNow = 30_100;
+            const act = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-only-2", isSubagent: true, cwd: dirA });
+            assert.deepEqual(act?.party, { id: "antigravity-swarm", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+        }
+    });
+
+    it("prevents unscoped subagent in DEFAULT_WORKSPACE_KEY from hijacking an active non-default workspace", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-unscoped-"));
+        try {
+            let fakeNow = 1_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root", cwd: dirA });
+            fakeNow = 1_001;
+            const act = await sm.handleHook({ event: "PreInvocation", conversationId: "sub1", isSubagent: true });
+
+            assert.equal(act?.state, `Project: ${path.basename(dirA)}`);
+            assert.equal(act?.startTimestamp, 1_000);
+            assert.deepEqual(act?.party, { id: "root", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+        }
+    });
+
+    it("scopes SessionEnd to target workspace without stopping other active workspaces", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-end-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-end-b-"));
+        try {
+            let fakeNow = 40_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "conv-a", cwd: dirA });
+            fakeNow = 40_100;
+            await sm.handleHook({ event: "PreInvocation", conversationId: "conv-b", cwd: dirB });
+
+            fakeNow = 40_200;
+            const afterEndB = await sm.handleHook({ event: "SessionEnd", conversationId: "conv-b" });
+            assert.equal(sm.getCurrentStatus(), PresenceStatus.THINKING);
+            assert.equal(afterEndB?.state, `Project: ${path.basename(dirA)}`);
+            assert.equal(afterEndB?.startTimestamp, 40_000);
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
     });
 
     it("caps party.id to 128 characters and isolates party counts per workspace", async () => {

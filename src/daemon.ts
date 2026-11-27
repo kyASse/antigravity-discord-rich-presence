@@ -297,6 +297,15 @@ export class RpcDaemon {
         await this.ipcServer.stop();
     }
 
+    private syncLifecycleTimers(status: PresenceStatus): void {
+        if (status === PresenceStatus.WAITING_REVIEW) {
+            this.resetIdleTimer();
+        } else if (status === PresenceStatus.STOPPED) {
+            this.clearIdleTimer();
+        }
+        this.resetWatchdogTimer(status);
+    }
+
     /**
      * Applies an incoming Antigravity lifecycle hook event to internal state and watchdog timers.
      */
@@ -307,15 +316,8 @@ export class RpcDaemon {
         }
 
         const activity = await this.stateMachine.handleHook(payload);
-
         const currentStatus = this.stateMachine.getCurrentStatus();
-        if (currentStatus === PresenceStatus.WAITING_REVIEW) {
-            this.resetIdleTimer();
-        } else if (currentStatus === PresenceStatus.STOPPED) {
-            this.clearIdleTimer();
-        }
-
-        this.resetWatchdogTimer(currentStatus);
+        this.syncLifecycleTimers(currentStatus);
         this.resetSubagentReaperTimer();
         return activity;
     }
@@ -499,24 +501,19 @@ export class RpcDaemon {
         this.clearSubagentReaperTimer();
         if (this.isStopping) return;
 
-        const delay = this.stateMachine.getNextSubagentExpiryMs();
-        if (delay === null) return;
+        const nextExpiryMs = this.stateMachine.getNextSubagentExpiryMs();
+        if (nextExpiryMs === null) return;
+
+        const delay = Math.min(nextExpiryMs, 2_147_483_647);
 
         this.subagentReaperTimer = setTimeout(() => {
             this.subagentReaperTimer = null;
             if (this.isStopping) return;
 
             try {
-                const pruned = this.stateMachine.pruneStaleSubagents();
-                if (pruned > 0) {
-                    const activity = this.stateMachine.getCurrentActivity();
-                    const currentStatus = this.stateMachine.getCurrentStatus();
-                    if (currentStatus === PresenceStatus.WAITING_REVIEW) {
-                        this.resetIdleTimer();
-                    } else if (currentStatus === PresenceStatus.STOPPED) {
-                        this.clearIdleTimer();
-                    }
-                    this.resetWatchdogTimer(currentStatus);
+                const { prunedCount, status, activity } = this.stateMachine.reapStaleSubagents();
+                if (prunedCount > 0) {
+                    this.syncLifecycleTimers(status);
                     this.schedulePresenceUpdate(activity);
                 }
             } catch {
