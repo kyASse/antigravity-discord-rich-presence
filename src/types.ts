@@ -28,9 +28,12 @@ export interface PresenceActivity {
     party?: { id: string; size: [number, number] };
 }
 
+export type PrivacyProfile = "stealth" | "balanced" | "showcase";
+
 export interface PluginConfig {
     clientId: string;
     privacyMode: boolean;
+    privacyProfile: PrivacyProfile;
     idleTimeoutSeconds: number;
     showRepoButton: boolean;
 }
@@ -38,9 +41,37 @@ export interface PluginConfig {
 export const DEFAULT_CONFIG: PluginConfig = {
     clientId: "1441771215290372156",
     privacyMode: false,
+    privacyProfile: "balanced",
     idleTimeoutSeconds: 300,
     showRepoButton: true
 };
+
+/**
+ * Parses a raw privacy profile string into a canonical PrivacyProfile, or undefined if invalid.
+ */
+export function parsePrivacyProfile(raw: string | undefined): PrivacyProfile | undefined {
+    if (!raw || typeof raw !== "string") {
+        return undefined;
+    }
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "stealth" || normalized === "balanced" || normalized === "showcase") {
+        return normalized;
+    }
+    return undefined;
+}
+
+/**
+ * Resolves the effective PrivacyProfile from a PluginConfig, preserving backward compatibility
+ * where legacy `privacyMode: true` maps to `"stealth"`.
+ */
+export function resolveEffectivePrivacyProfile(
+    config: Pick<PluginConfig, "privacyMode" | "privacyProfile">
+): PrivacyProfile {
+    if (config.privacyMode === true) {
+        return "stealth";
+    }
+    return parsePrivacyProfile(config.privacyProfile) ?? DEFAULT_CONFIG.privacyProfile;
+}
 
 function parseBoolean(raw: string | undefined, fallback: boolean): boolean {
     if (raw === undefined) {
@@ -77,9 +108,22 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): PluginC
         }
     }
 
+    const explicitProfile = parsePrivacyProfile(env.AGY_DISCORD_PRIVACY_PROFILE);
+    let privacyMode: boolean;
+    let privacyProfile: PrivacyProfile;
+
+    if (explicitProfile) {
+        privacyProfile = explicitProfile;
+        privacyMode = explicitProfile === "stealth";
+    } else {
+        privacyMode = parseBoolean(env.AGY_DISCORD_PRIVACY_MODE, DEFAULT_CONFIG.privacyMode);
+        privacyProfile = privacyMode ? "stealth" : DEFAULT_CONFIG.privacyProfile;
+    }
+
     return {
         clientId,
-        privacyMode: parseBoolean(env.AGY_DISCORD_PRIVACY_MODE, DEFAULT_CONFIG.privacyMode),
+        privacyMode,
+        privacyProfile,
         idleTimeoutSeconds,
         showRepoButton: parseBoolean(env.AGY_DISCORD_SHOW_REPO_BUTTON, DEFAULT_CONFIG.showRepoButton)
     };

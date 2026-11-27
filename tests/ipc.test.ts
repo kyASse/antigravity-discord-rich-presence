@@ -1,6 +1,8 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { IpcServer, sendIpcMessage, getIpcAddress, probeSocketActive } from "../src/ipc";
 import { RpcDaemon } from "../src/daemon";
 import { HookPayload, PresenceStatus, encodeInitialPayload, DEFAULT_CONFIG } from "../src/types";
@@ -257,6 +259,7 @@ describe("RPC Daemon Core", () => {
             {
                 clientId: "1441771215290372156",
                 privacyMode: false,
+                privacyProfile: "balanced",
                 idleTimeoutSeconds: 0.05, // 50ms idle timeout for testing
                 showRepoButton: true
             },
@@ -601,6 +604,69 @@ describe("RPC Daemon Core", () => {
             assert.ok(setCalls.some((c) => c.details === "Idling in workspace"));
         } finally {
             await daemon.stop();
+        }
+    });
+
+    it("forwards env/globalConfig to stateMachine and applies workspace idleTimeoutSeconds and stealth overrides", async () => {
+        const testPipe = process.platform === "win32"
+            ? `\\\\.\\pipe\\agy-daemon-wscfg-${process.pid}`
+            : `/tmp/agy-daemon-wscfg-${process.pid}.sock`;
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daemon-wscfg-"));
+        fs.mkdirSync(path.join(tmpDir, ".agents"), { recursive: true });
+        fs.writeFileSync(
+            path.join(tmpDir, ".agents", "discord-rpc.json"),
+            JSON.stringify({ privacyProfile: "stealth", idleTimeoutSeconds: 0.06 }),
+            "utf-8"
+        );
+
+        const setCalls: any[] = [];
+        const mockRpc = {
+            login: async () => {},
+            destroy: async () => {},
+            user: {
+                setActivity: async (act: any) => {
+                    setCalls.push(act);
+                    return act;
+                },
+                clearActivity: async () => {}
+            }
+        };
+
+        const daemon = new RpcDaemon(DEFAULT_CONFIG, {
+            ipcPath: testPipe,
+            throttleMs: 0,
+            globalConfig: { privacyProfile: "showcase" },
+            env: {},
+            rpcClient: mockRpc as any
+        });
+
+        try {
+            await daemon.start();
+            await daemon.handlePayload({
+                event: "PreToolUse",
+                conversationId: "conv-ws",
+                cwd: tmpDir,
+                toolName: "read_file",
+                toolArgs: { Path: "secret.ts" }
+            });
+            assert.equal(setCalls[setCalls.length - 1]?.details, "Working in Antigravity");
+            assert.equal(setCalls[setCalls.length - 1]?.state, undefined);
+
+            await daemon.handlePayload({
+                event: "Stop",
+                conversationId: "conv-ws",
+                cwd: tmpDir,
+                terminationReason: "NO_TOOL_CALL"
+            });
+            assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.WAITING_REVIEW);
+
+            // Workspace idleTimeoutSeconds (60ms) fires even though DEFAULT_CONFIG is 300s
+            await new Promise((r) => setTimeout(r, 110));
+            assert.equal(daemon.stateMachine.getCurrentStatus(), PresenceStatus.IDLE);
+        } finally {
+            await daemon.stop();
+            fs.rmSync(tmpDir, { recursive: true, force: true });
         }
     });
 });

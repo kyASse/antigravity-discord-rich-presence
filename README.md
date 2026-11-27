@@ -20,7 +20,7 @@ This plugin displays your real-time agent activity, current project, Git branch,
   - Generates clickable Discord buttons pointing to your repository (GitHub, GitLab, Bitbucket).
 - **Privacy & Security First**:
   - Automatic scrubbing of sensitive tokens, bearer secrets, passwords, and private credentials from tool arguments and remote Git URLs.
-  - Built-in `privacyMode` to hide repository links and mask command details.
+  - 3-tier privacy profiles (`stealth`, `balanced`, `showcase`) with automatic redaction of sensitive filenames (`.env*`, `*.pem`, `*secret*`, `*credentials*`, `id_rsa`, etc.).
 - **Idle Inactivity Detection**:
   - Transitions to `Idle (awaiting instructions)` after a configurable timeout (default: 5 minutes) when waiting for user review.
 
@@ -84,17 +84,67 @@ After cloning, **restart Antigravity App** (or start a new conversation session)
 
 ## Configuration
 
-The plugin works out of the box with zero configuration. You can customize behavior using environment variables:
+The plugin works out of the box with zero configuration. Settings are resolved using the following precedence (highest to lowest):
+
+`Environment Variables > Workspace Config (.agents/discord-rpc.json) > Global Config (~/.gemini/antigravity-discord-rpc.json) > Defaults`
+
+### Privacy Profiles (`privacyProfile`)
+
+| Profile | Repo & Branch | Action Details | Sensitive Files (`.env*`, `*.pem`, `id_rsa`, etc.) | Repo Button & Party |
+| :--- | :--- | :--- | :--- | :--- |
+| `stealth` | Hidden | `"Working in Antigravity"` + timer only | Hidden | Hidden |
+| `balanced` *(Default)* | Shown | Non-sensitive filenames + base command (`Running: npm`) | Redacted (`Reading/Editing sensitive file`) | Shown |
+| `showcase` | Shown | Non-sensitive filenames + full sanitized command/summary | Redacted (`Reading/Editing sensitive file`) | Shown |
+
+> [!TIP]
+> Setting `AGY_DISCORD_PRIVACY_MODE=true` (or `"privacyMode": true` in JSON) automatically maps to the `stealth` profile for backward compatibility.
+
+### Environment Variables
 
 | Variable | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `AGY_DISCORD_CLIENT_ID` | `string` | `1441771215290372156` | Custom Discord Application Client ID |
-| `AGY_DISCORD_PRIVACY_MODE` | `boolean` | `false` | When `true`, hides repository buttons and obscures command details |
+| `AGY_DISCORD_CLIENT_ID` | `string` | `1441771215290372156` | Custom Discord Application Client ID *(daemon-level)* |
+| `AGY_DISCORD_PRIVACY_PROFILE` | `string` | `"balanced"` | Privacy preset: `"stealth"`, `"balanced"`, or `"showcase"` |
+| `AGY_DISCORD_PRIVACY_MODE` | `boolean` | `false` | Legacy flag: when `true` (and profile unset), maps to `"stealth"` |
 | `AGY_DISCORD_IDLE_TIMEOUT` | `number` | `300` | Inactivity idle timeout in seconds (default: 5 minutes) |
-| `AGY_DISCORD_WATCHDOG_TIMEOUT` | `number` | `1800` | Watchdog heartbeat timeout in seconds (default: 30 minutes) |
+| `AGY_DISCORD_WATCHDOG_TIMEOUT` | `number` | `1800` | Watchdog inactivity shutdown timeout in seconds *(daemon-level)* |
+| `AGY_DISCORD_SUBAGENT_TTL` | `number` | `600` | Orphaned subagent expiry TTL in seconds *(daemon-level, default: 10 minutes)* |
 | `AGY_DISCORD_SHOW_REPO_BUTTON` | `boolean` | `true` | Show clickable "View Repository" action button |
 | `AGY_AUTO_SPAWN` | `boolean` | `true` | Set to `false` to disable auto-spawning the daemon |
 | `AGY_IPC_PATH` | `string` | Auto-detected | Custom IPC pipe or socket path |
+
+### Persistent JSON Configuration
+
+Instead of environment variables, you can persist settings in optional JSON files:
+
+- **Global User Config** *(daemon-level & default preferences)*: `~/.gemini/antigravity-discord-rpc.json` (Windows: `%USERPROFILE%\.gemini\antigravity-discord-rpc.json`)
+- **Workspace Config** *(per-project overrides, refreshed every 5s)*: `<workspace>/.agents/discord-rpc.json`
+
+Example JSON configuration:
+
+```json
+{
+  "clientId": "1441771215290372156",
+  "privacyProfile": "balanced",
+  "idleTimeoutSeconds": 300,
+  "showRepoButton": true,
+  "watchdogTimeoutSeconds": 1800,
+  "subagentTtlSeconds": 600
+}
+```
+
+> [!NOTE]
+> **Daemon-Level vs. Workspace-Level Keys:** `clientId`, `watchdogTimeoutSeconds`, and `subagentTtlSeconds` apply at daemon startup (from Global Config and Environment Variables) and are ignored if placed in `.agents/discord-rpc.json`. Workspace configs can override `privacyProfile`, `privacyMode`, `showRepoButton`, and `idleTimeoutSeconds` independently per repository. Missing or malformed JSON files are safely ignored.
+
+### Custom `AGY_DISCORD_CLIENT_ID` Asset Checklist
+
+If you use your own Discord Application ID via `AGY_DISCORD_CLIENT_ID` (or `"clientId"` in global config), upload the following **Rich Presence Art Asset** keys in the [Discord Developer Portal](https://discord.com/developers/applications) under **Rich Presence → Art Assets** so all status icons render properly:
+
+- [ ] `antigravity` *(Large image — main Antigravity icon)*
+- [ ] `brain` *(Small image — `THINKING` state)*
+- [ ] `gear` *(Small image — `EXECUTING_TOOL` state)*
+- [ ] `hourglass` *(Small image — `WAITING_REVIEW` state)*
+- [ ] `zzz` *(Small image — `IDLE` state)*
 
 > [!NOTE]
 > **Action Buttons on Your Own Profile:** Discord Desktop intentionally disables clicking Rich Presence action buttons (such as "View Repository") when viewing your own profile preview. Other Discord users viewing your profile can click these buttons normally.

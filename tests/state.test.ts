@@ -106,7 +106,7 @@ describe("Presence State Machine", () => {
         assert.equal(sm.getCurrentStatus(), PresenceStatus.THINKING);
     });
 
-    it("respects privacyMode by omitting repository button and masking tool actions", async () => {
+    it("maps legacy privacyMode=true to stealth mode by hiding repo, tool details, buttons, and party", async () => {
         const privateConfig = { ...DEFAULT_CONFIG, privacyMode: true };
         const sm = new PresenceStateMachine(privateConfig);
         const activity = await sm.handleHook({
@@ -115,8 +115,12 @@ describe("Presence State Machine", () => {
             toolName: "run_command",
             toolArgs: { CommandLine: "git commit -m 'secret token 123'" }
         });
+        assert.equal(activity?.details, "Working in Antigravity");
+        assert.equal(activity?.state, undefined);
+        assert.equal(activity?.smallImageKey, undefined);
+        assert.equal(activity?.smallImageText, undefined);
         assert.equal(activity?.buttons, undefined);
-        assert.equal(activity?.details, "Running: git");
+        assert.equal(activity?.party, undefined);
     });
 
     it("includes View Repository button when Git remote exists and showRepoButton is true", async () => {
@@ -462,6 +466,175 @@ describe("Presence State Machine", () => {
                 toolArgs: { Path: "index.ts" }
             });
             assert.deepEqual(actB?.party, { id: "root-b", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
+
+    it("enforces stealth profile across all states and suppresses party/state/smallImage/buttons", async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "stealth-state-test-"));
+        try {
+            execFileSync("git", ["init"], { cwd: tmpDir, stdio: "ignore" });
+            execFileSync(
+                "git",
+                ["config", "remote.origin.url", "https://github.com/test-owner/secret-repo.git"],
+                { cwd: tmpDir, stdio: "ignore" }
+            );
+
+            const sm = new PresenceStateMachine({
+                ...DEFAULT_CONFIG,
+                privacyProfile: "stealth",
+                showRepoButton: true
+            });
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root", cwd: tmpDir });
+            const executing = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "sub1",
+                isSubagent: true,
+                cwd: tmpDir,
+                toolName: "read_file",
+                toolArgs: { Path: "secret-file.ts" }
+            });
+            assert.equal(executing?.details, "Working in Antigravity");
+            assert.equal(executing?.state, undefined);
+            assert.equal(executing?.buttons, undefined);
+            assert.equal(executing?.smallImageKey, undefined);
+            assert.equal(executing?.smallImageText, undefined);
+            assert.equal(executing?.party, undefined);
+            assert.equal(executing?.largeImageKey, "antigravity");
+            assert.ok(executing?.startTimestamp);
+
+            await sm.handleHook({ event: "Stop", conversationId: "sub1", isSubagent: true, terminationReason: "NO_TOOL_CALL" });
+            const review = await sm.handleHook({ event: "Stop", conversationId: "root", terminationReason: "NO_TOOL_CALL" });
+            assert.equal(review?.details, "Working in Antigravity");
+            assert.equal(review?.state, undefined);
+            assert.equal(review?.smallImageKey, undefined);
+
+            const idle = sm.handleIdleTimeout();
+            assert.equal(idle?.details, "Working in Antigravity");
+            assert.equal(idle?.state, undefined);
+            assert.equal(idle?.smallImageKey, undefined);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    it("applies balanced vs showcase tool and sensitive filename rules in state machine", async () => {
+        const balancedSm = new PresenceStateMachine({ ...DEFAULT_CONFIG, privacyProfile: "balanced" });
+        const envAct = await balancedSm.handleHook({
+            event: "PreToolUse",
+            conversationId: "c1",
+            toolName: "read_file",
+            toolArgs: { Path: "/app/.env.production" }
+        });
+        assert.equal(envAct?.details, "Reading sensitive file");
+
+        const cmdBalanced = await balancedSm.handleHook({
+            event: "PreToolUse",
+            conversationId: "c1",
+            toolName: "run_command",
+            toolArgs: { toolSummary: "Deploy prod", CommandLine: "npm run deploy --token=secret" }
+        });
+        assert.equal(cmdBalanced?.details, "Running: npm");
+
+        const showcaseSm = new PresenceStateMachine({ ...DEFAULT_CONFIG, privacyProfile: "showcase" });
+        const envShowcase = await showcaseSm.handleHook({
+            event: "PreToolUse",
+            conversationId: "c2",
+            toolName: "read_file",
+            toolArgs: { Path: "/app/.env" }
+        });
+        assert.equal(envShowcase?.details, "Reading sensitive file");
+
+        const cmdShowcase = await showcaseSm.handleHook({
+            event: "PreToolUse",
+            conversationId: "c2",
+            toolName: "run_command",
+            toolArgs: { toolSummary: "Deploy using TOKEN=ghp_123456" }
+        });
+        assert.equal(cmdShowcase?.details, "Running: Deploy using TOKEN=***");
+    });
+
+    it("resolves per-workspace .agents/discord-rpc.json overrides with 5s TTL cache and env precedence", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "ws-cfg-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "ws-cfg-b-"));
+        try {
+            fs.mkdirSync(path.join(dirA, ".agents"), { recursive: true });
+            fs.mkdirSync(path.join(dirB, ".agents"), { recursive: true });
+            fs.writeFileSync(
+                path.join(dirA, ".agents", "discord-rpc.json"),
+                JSON.stringify({ privacyProfile: "stealth", idleTimeoutSeconds: 90 }),
+                "utf-8"
+            );
+            fs.writeFileSync(
+                path.join(dirB, ".agents", "discord-rpc.json"),
+                JSON.stringify({ privacyProfile: "showcase", showRepoButton: false, idleTimeoutSeconds: 45 }),
+                "utf-8"
+            );
+
+            let fakeNow = 10_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+
+            // Workspace A: stealth with active subagent suppresses party/state/smallImage
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root-a", cwd: dirA });
+            const actA = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-a", isSubagent: true, cwd: dirA });
+            assert.equal(actA?.details, "Working in Antigravity");
+            assert.equal(actA?.state, undefined);
+            assert.equal(actA?.party, undefined);
+            assert.equal(sm.getActiveIdleTimeoutSeconds(), 90);
+
+            // Workspace B wins with EXECUTING_TOOL and uses showcase + showRepoButton: false + idleTimeoutSeconds: 45
+            fakeNow = 11_000;
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root-b", cwd: dirB });
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "sub-b",
+                isSubagent: true,
+                cwd: dirB,
+                toolName: "run_command",
+                toolArgs: { toolSummary: "Run integration tests" }
+            });
+            assert.equal(actB?.details, "Running: Run integration tests");
+            assert.equal(actB?.state, `Project: ${path.basename(dirB)}`);
+            assert.equal(actB?.buttons, undefined);
+            assert.deepEqual(actB?.party, { id: "root-b", size: [2, 2] });
+            assert.equal(sm.getActiveIdleTimeoutSeconds(), 45);
+
+            // Update Workspace B config on disk; cached within 5s, refreshed after > 5s
+            fs.writeFileSync(
+                path.join(dirB, ".agents", "discord-rpc.json"),
+                JSON.stringify({ privacyProfile: "stealth" }),
+                "utf-8"
+            );
+            fakeNow = 13_000;
+            const cachedB = sm.getCurrentActivity();
+            assert.match(cachedB?.details ?? "", /Run integration tests/);
+
+            fakeNow = 17_000;
+            const refreshedB = sm.getCurrentActivity();
+            assert.equal(refreshedB?.details, "Working in Antigravity");
+            assert.equal(refreshedB?.party, undefined);
+
+            // Explicit env override trumps workspace .agents/discord-rpc.json
+            const envSm = new PresenceStateMachine(DEFAULT_CONFIG, {
+                env: { AGY_DISCORD_PRIVACY_PROFILE: "showcase" },
+                globalConfig: { privacyProfile: "stealth" }
+            });
+            fs.writeFileSync(
+                path.join(dirA, ".agents", "discord-rpc.json"),
+                JSON.stringify({ privacyProfile: "stealth" }),
+                "utf-8"
+            );
+            const envAct = await envSm.handleHook({
+                event: "PreToolUse",
+                conversationId: "c-env",
+                cwd: dirA,
+                toolName: "run_command",
+                toolArgs: { toolSummary: "Full showcase command" }
+            });
+            assert.equal(envAct?.details, "Running: Full showcase command");
         } finally {
             fs.rmSync(dirA, { recursive: true, force: true });
             fs.rmSync(dirB, { recursive: true, force: true });

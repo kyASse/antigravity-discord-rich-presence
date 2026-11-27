@@ -3,10 +3,18 @@ import {
     PresenceStatus,
     DEFAULT_CONFIG,
     DEFAULT_SUBAGENT_TTL_MS,
+    resolveEffectivePrivacyProfile,
     type HookPayload,
     type PresenceActivity,
-    type PluginConfig
+    type PluginConfig,
+    type PrivacyProfile
 } from "./types.js";
+import {
+    getWorkspaceConfigPath,
+    loadConfigFile,
+    parseConfigOverridesFromEnv,
+    toWorkspaceOverrides
+} from "./config.js";
 import { mapToolToAction, truncateRpcText, validateRpcButtonUrl } from "./sanitizer.js";
 import { getGitInfo, type GitInfo } from "./git.js";
 
@@ -20,6 +28,10 @@ export function normalizeWorkspaceKey(cwd: string): string {
 export interface PresenceStateMachineOptions {
     subagentTtlMs?: number;
     now?: () => number;
+    env?: NodeJS.ProcessEnv;
+    globalConfig?: Partial<PluginConfig>;
+    enableWorkspaceConfig?: boolean;
+    configCacheTtlMs?: number;
 }
 
 interface SessionState {
@@ -37,6 +49,8 @@ interface WorkspaceContext {
     cwd: string;
     gitInfo?: GitInfo;
     lastGitFetchTime: number;
+    workspaceOverrides?: Partial<PluginConfig>;
+    lastConfigFetchTime: number;
     startTimestamp?: number;
     peakActiveAgents: number;
     updatedAt: number;
@@ -56,6 +70,10 @@ const STATUS_PRIORITY: Record<PresenceStatus, number> = {
  */
 export class PresenceStateMachine {
     public readonly config: PluginConfig;
+    private readonly baseConfig: PluginConfig;
+    private readonly envOverrides: Partial<PluginConfig>;
+    private readonly enableWorkspaceConfig: boolean;
+    private readonly configCacheTtlMs: number;
     private readonly subagentTtlMs: number;
     private readonly now: () => number;
     private readonly sessions = new Map<string, SessionState>();
@@ -65,7 +83,17 @@ export class PresenceStateMachine {
     private readonly largeImageText = "Antigravity";
 
     constructor(config: PluginConfig = DEFAULT_CONFIG, options: PresenceStateMachineOptions = {}) {
-        this.config = config;
+        this.baseConfig = options.globalConfig
+            ? { ...DEFAULT_CONFIG, ...options.globalConfig }
+            : config;
+        this.envOverrides = options.env
+            ? toWorkspaceOverrides(parseConfigOverridesFromEnv(options.env))
+            : {};
+        this.config = (options.globalConfig || options.env)
+            ? { ...this.baseConfig, ...this.envOverrides }
+            : config;
+        this.enableWorkspaceConfig = options.enableWorkspaceConfig ?? true;
+        this.configCacheTtlMs = options.configCacheTtlMs ?? 5000;
         this.subagentTtlMs = options.subagentTtlMs ?? DEFAULT_SUBAGENT_TTL_MS;
         this.now = options.now ?? (() => Date.now());
     }
@@ -274,6 +302,7 @@ export class PresenceStateMachine {
                 key: targetWorkspaceKey,
                 cwd: resolvedCwd ?? process.cwd(),
                 lastGitFetchTime: 0,
+                lastConfigFetchTime: 0,
                 peakActiveAgents: 0,
                 updatedAt: now
             };
@@ -495,12 +524,48 @@ export class PresenceStateMachine {
         return this.buildActivity();
     }
 
+    private getEffectiveConfig(workspace: WorkspaceContext, now: number = this.now()): PluginConfig {
+        if (
+            this.enableWorkspaceConfig &&
+            workspace.key !== DEFAULT_WORKSPACE_KEY &&
+            (workspace.workspaceOverrides === undefined ||
+                now - workspace.lastConfigFetchTime > this.configCacheTtlMs)
+        ) {
+            workspace.workspaceOverrides = toWorkspaceOverrides(
+                loadConfigFile(getWorkspaceConfigPath(workspace.cwd))
+            );
+            workspace.lastConfigFetchTime = now;
+        }
+
+        return {
+            ...this.baseConfig,
+            ...(workspace.workspaceOverrides ?? {}),
+            ...this.envOverrides
+        };
+    }
+
+    /**
+     * Returns the effective idleTimeoutSeconds for the currently winning workspace,
+     * falling back to the daemon/base config idleTimeoutSeconds.
+     */
+    public getActiveIdleTimeoutSeconds(): number {
+        const winning = this.getWinningWorkspace();
+        if (!winning) {
+            return this.config.idleTimeoutSeconds;
+        }
+        return this.getEffectiveConfig(winning.workspace).idleTimeoutSeconds;
+    }
+
     /**
      * Formats repository action buttons for Discord Rich Presence.
      * Enforces valid HTTP/HTTPS URL, max 512 URL length, max 32 label length, max 2 buttons.
      */
-    private getButtons(workspace: WorkspaceContext): Array<{ label: string; url: string }> | undefined {
-        if (this.config.showRepoButton && !this.config.privacyMode && workspace.gitInfo?.remoteUrl) {
+    private getButtons(
+        workspace: WorkspaceContext,
+        effectiveConfig: PluginConfig,
+        profile: PrivacyProfile
+    ): Array<{ label: string; url: string }> | undefined {
+        if (effectiveConfig.showRepoButton && profile !== "stealth" && workspace.gitInfo?.remoteUrl) {
             const validUrl = validateRpcButtonUrl(workspace.gitInfo.remoteUrl);
             const validLabel = truncateRpcText("View Repository", 32);
             if (validUrl && validLabel) {
@@ -595,6 +660,22 @@ export class PresenceStateMachine {
             workspace.startTimestamp = this.now();
         }
 
+        const effectiveConfig = this.getEffectiveConfig(workspace);
+        const profile = resolveEffectivePrivacyProfile(effectiveConfig);
+
+        if (profile === "stealth") {
+            if (status === PresenceStatus.STOPPED) {
+                return null;
+            }
+            workspace.peakActiveAgents = 0;
+            return {
+                details: "Working in Antigravity",
+                startTimestamp: workspace.startTimestamp,
+                largeImageKey: this.largeImageKey,
+                largeImageText: truncateRpcText(this.largeImageText, 128)
+            };
+        }
+
         let details: string | undefined;
         let smallImageKey: string;
         let smallImageText: string;
@@ -615,7 +696,7 @@ export class PresenceStateMachine {
                 const action = mapToolToAction(
                     activeSession?.toolName || "",
                     activeSession?.toolArgs,
-                    this.config.privacyMode
+                    profile
                 );
                 const isExecutingSubagent = activeSession?.isSubagent ?? false;
                 const subSuffix =
@@ -657,7 +738,7 @@ export class PresenceStateMachine {
             largeImageText: truncateRpcText(this.largeImageText, 128),
             smallImageKey,
             smallImageText: truncateRpcText(smallImageText, 128),
-            buttons: this.getButtons(workspace)
+            buttons: this.getButtons(workspace, effectiveConfig, profile)
         };
 
         if (party) {

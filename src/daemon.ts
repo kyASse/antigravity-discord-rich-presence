@@ -3,15 +3,13 @@ import { PresenceStateMachine } from "./state.js";
 import { IpcServer } from "./ipc.js";
 import {
     DEFAULT_CONFIG,
-    loadConfigFromEnv,
-    loadSubagentTtlMsFromEnv,
-    loadWatchdogTimeoutMsFromEnv,
     PresenceStatus,
     decodeInitialPayload,
     type HookPayload,
     type PresenceActivity,
     type PluginConfig
 } from "./types.js";
+import { loadDaemonConfig } from "./config.js";
 
 export interface DaemonOptions {
     ipcPath?: string;
@@ -23,6 +21,9 @@ export interface DaemonOptions {
     watchdogMs?: number;
     activeWatchdogMs?: number;
     subagentTtlMs?: number;
+    env?: NodeJS.ProcessEnv;
+    globalConfig?: Partial<PluginConfig>;
+    enableWorkspaceConfig?: boolean;
     onWatchdogExit?: () => void;
 }
 
@@ -68,7 +69,10 @@ export class RpcDaemon {
     constructor(config: PluginConfig = DEFAULT_CONFIG, options: DaemonOptions = {}) {
         this.config = config;
         this.stateMachine = new PresenceStateMachine(this.config, {
-            subagentTtlMs: options.subagentTtlMs
+            subagentTtlMs: options.subagentTtlMs,
+            env: options.env,
+            globalConfig: options.globalConfig,
+            enableWorkspaceConfig: options.enableWorkspaceConfig
         });
         this.ipcServer = new IpcServer(options.ipcPath);
         this.throttleMs = options.throttleMs ?? 2000;
@@ -460,7 +464,8 @@ export class RpcDaemon {
 
     private resetIdleTimer(): void {
         this.clearIdleTimer();
-        const ms = Math.max(10, (this.config.idleTimeoutSeconds ?? 300) * 1000);
+        const timeoutSeconds = this.stateMachine.getActiveIdleTimeoutSeconds();
+        const ms = Math.max(10, (timeoutSeconds ?? 300) * 1000);
         this.idleTimer = setTimeout(() => {
             try {
                 const idleActivity = this.stateMachine.handleIdleTimeout();
@@ -534,9 +539,12 @@ const isDirectRun = Boolean(
 );
 
 if (isDirectRun) {
-    const daemon = new RpcDaemon(loadConfigFromEnv(), {
-        watchdogMs: loadWatchdogTimeoutMsFromEnv(),
-        subagentTtlMs: loadSubagentTtlMsFromEnv(),
+    const loaded = loadDaemonConfig();
+    const daemon = new RpcDaemon(loaded.config, {
+        watchdogMs: loaded.watchdogMs,
+        subagentTtlMs: loaded.subagentTtlMs,
+        env: process.env,
+        globalConfig: loaded.globalConfig,
         onWatchdogExit: () => process.exit(0)
     });
     daemon.start().catch((err) => {
