@@ -329,4 +329,72 @@ describe("Presence State Machine", () => {
         assert.equal(sm.getCurrentStatus(), PresenceStatus.STOPPED);
         assert.equal(sm.getCurrentActivity(), null);
     });
+
+    it("populates Discord RPC party metrics during active subagent swarms and clears when subagents end", async () => {
+        const sm = new PresenceStateMachine(DEFAULT_CONFIG);
+
+        // Primary agent alone: no party
+        const solo = await sm.handleHook({ event: "PreInvocation", conversationId: "root-swarm" });
+        assert.equal(solo?.party, undefined);
+
+        // 2 subagents join -> 3 active agents of peak 3
+        await sm.handleHook({ event: "PreInvocation", conversationId: "sub-1", isSubagent: true });
+        const swarm3 = await sm.handleHook({
+            event: "PreToolUse",
+            conversationId: "sub-2",
+            isSubagent: true,
+            toolName: "search_web"
+        });
+        assert.deepEqual(swarm3?.party, { id: "root-swarm", size: [3, 3] });
+
+        // 1 subagent completes -> 2 active of peak 3
+        const swarm2 = await sm.handleHook({
+            event: "Stop",
+            conversationId: "sub-2",
+            isSubagent: true,
+            terminationReason: "NO_TOOL_CALL"
+        });
+        assert.deepEqual(swarm2?.party, { id: "root-swarm", size: [2, 3] });
+
+        // Last subagent completes -> party cleared
+        const backToSolo = await sm.handleHook({
+            event: "Stop",
+            conversationId: "sub-1",
+            isSubagent: true,
+            terminationReason: "NO_TOOL_CALL"
+        });
+        assert.equal(backToSolo?.party, undefined);
+    });
+
+    it("caps party.id to 128 characters and isolates party counts per workspace", async () => {
+        const dirA = fs.mkdtempSync(path.join(os.tmpdir(), "party-a-"));
+        const dirB = fs.mkdtempSync(path.join(os.tmpdir(), "party-b-"));
+        try {
+            let fakeNow = 5_000;
+            const sm = new PresenceStateMachine(DEFAULT_CONFIG, { now: () => fakeNow });
+            const longConvId = "swarm-" + "x".repeat(150);
+
+            await sm.handleHook({ event: "PreInvocation", conversationId: longConvId, cwd: dirA });
+            const actA = await sm.handleHook({ event: "PreInvocation", conversationId: "sub-a1", isSubagent: true, cwd: dirA });
+            assert.ok(actA?.party);
+            assert.ok(actA.party.id.length >= 2 && actA.party.id.length <= 128);
+            assert.deepEqual(actA.party.size, [2, 2]);
+
+            // Workspace B with 1 subagent only counts its own agents
+            fakeNow = 6_000;
+            await sm.handleHook({ event: "PreInvocation", conversationId: "root-b", cwd: dirB });
+            const actB = await sm.handleHook({
+                event: "PreToolUse",
+                conversationId: "sub-b1",
+                isSubagent: true,
+                cwd: dirB,
+                toolName: "read_file",
+                toolArgs: { Path: "index.ts" }
+            });
+            assert.deepEqual(actB?.party, { id: "root-b", size: [2, 2] });
+        } finally {
+            fs.rmSync(dirA, { recursive: true, force: true });
+            fs.rmSync(dirB, { recursive: true, force: true });
+        }
+    });
 });

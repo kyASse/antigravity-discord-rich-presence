@@ -137,13 +137,25 @@ export class PresenceStateMachine {
 
         for (const workspaceKey of affectedWorkspaces) {
             const ws = this.workspaces.get(workspaceKey);
-            if (ws && this.getWorkspaceStatus(workspaceKey) === PresenceStatus.STOPPED) {
-                ws.startTimestamp = undefined;
-                ws.peakActiveAgents = 0;
+            if (ws) {
+                this.syncWorkspaceLifecycle(ws);
             }
         }
 
         return prunedCount;
+    }
+
+    private syncWorkspaceLifecycle(ws: WorkspaceContext): void {
+        const wsStatus = this.getWorkspaceStatus(ws.key);
+        if (wsStatus === PresenceStatus.STOPPED) {
+            ws.startTimestamp = undefined;
+            ws.peakActiveAgents = 0;
+        } else if (
+            this.countActiveSubagents(ws.key) === 0 ||
+            (wsStatus !== PresenceStatus.THINKING && wsStatus !== PresenceStatus.EXECUTING_TOOL)
+        ) {
+            ws.peakActiveAgents = 0;
+        }
     }
 
     /**
@@ -172,12 +184,7 @@ export class PresenceStateMachine {
         return this.getWinningWorkspace()?.status ?? PresenceStatus.STOPPED;
     }
 
-    /**
-     * Returns the count of currently active subagents (actively thinking or running tools).
-     * When workspaceKey is provided, scopes to that workspace (plus unassigned default subagents).
-     */
-    public getActiveSubagentsCount(workspaceKey?: string): number {
-        this.pruneStaleSubagents(this.now());
+    private countActiveSubagents(workspaceKey?: string): number {
         let count = 0;
         for (const session of this.sessions.values()) {
             if (
@@ -196,6 +203,15 @@ export class PresenceStateMachine {
             }
         }
         return count;
+    }
+
+    /**
+     * Returns the count of currently active subagents (actively thinking or running tools).
+     * When workspaceKey is provided, scopes to that workspace (plus unassigned default subagents).
+     */
+    public getActiveSubagentsCount(workspaceKey?: string): number {
+        this.pruneStaleSubagents(this.now());
+        return this.countActiveSubagents(workspaceKey);
     }
 
     /**
@@ -363,10 +379,7 @@ export class PresenceStateMachine {
         }
 
         for (const ws of this.workspaces.values()) {
-            if (this.getWorkspaceStatus(ws.key) === PresenceStatus.STOPPED) {
-                ws.startTimestamp = undefined;
-                ws.peakActiveAgents = 0;
-            }
+            this.syncWorkspaceLifecycle(ws);
         }
 
         return this.buildActivity();
@@ -468,6 +481,50 @@ export class PresenceStateMachine {
     }
 
     /**
+     * Computes Discord RPC party metrics for an active subagent swarm in the winning workspace.
+     * Resets peakActiveAgents when no subagents are active or the workspace is not actively working.
+     */
+    private buildPartyMetrics(
+        workspace: WorkspaceContext,
+        status: PresenceStatus,
+        subCount: number
+    ): PresenceActivity["party"] {
+        if ((status !== PresenceStatus.THINKING && status !== PresenceStatus.EXECUTING_TOOL) || subCount <= 0) {
+            workspace.peakActiveAgents = 0;
+            return undefined;
+        }
+
+        let activePrimary: SessionState | undefined;
+        let fallbackPrimary: SessionState | undefined;
+
+        for (const session of this.sessions.values()) {
+            if (session.workspaceKey !== workspace.key || session.isSubagent) continue;
+
+            const isActive =
+                session.status === PresenceStatus.THINKING ||
+                session.status === PresenceStatus.EXECUTING_TOOL;
+
+            if (isActive && (!activePrimary || session.updatedAt >= activePrimary.updatedAt)) {
+                activePrimary = session;
+            }
+            if (!fallbackPrimary || session.updatedAt >= fallbackPrimary.updatedAt) {
+                fallbackPrimary = session;
+            }
+        }
+
+        const activeAgents = (activePrimary ? 1 : 0) + subCount;
+        workspace.peakActiveAgents = Math.max(workspace.peakActiveAgents, activeAgents);
+
+        const rawPartyId = activePrimary?.conversationId ?? fallbackPrimary?.conversationId ?? "antigravity-swarm";
+        const partyId = truncateRpcText(rawPartyId, 128) || "antigravity-swarm";
+
+        return {
+            id: partyId,
+            size: [activeAgents, workspace.peakActiveAgents]
+        };
+    }
+
+    /**
      * Constructs the full PresenceActivity payload for the winning workspace.
      */
     private buildActivity(): PresenceActivity | null {
@@ -485,7 +542,7 @@ export class PresenceStateMachine {
         let smallImageKey: string;
         let smallImageText: string;
 
-        const subCount = this.getActiveSubagentsCount(workspace.key);
+        const subCount = this.countActiveSubagents(workspace.key);
 
         switch (status) {
             case PresenceStatus.THINKING: {
@@ -534,7 +591,8 @@ export class PresenceStateMachine {
                 return null;
         }
 
-        return {
+        const party = this.buildPartyMetrics(workspace, status, subCount);
+        const activity: PresenceActivity = {
             details: truncateRpcText(details, 128),
             state: this.formatState(workspace, status),
             startTimestamp: workspace.startTimestamp,
@@ -544,5 +602,11 @@ export class PresenceStateMachine {
             smallImageText: truncateRpcText(smallImageText, 128),
             buttons: this.getButtons(workspace)
         };
+
+        if (party) {
+            activity.party = party;
+        }
+
+        return activity;
     }
 }
